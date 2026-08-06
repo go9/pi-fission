@@ -38,6 +38,24 @@ describe("config diagnostics", () => {
     assert.doesNotMatch(JSON.stringify(result.diagnostics), /super-secret-value/);
   });
 
+  it("allows keyless loopback endpoints and requires an environment key for remote endpoints", () => {
+    for (const baseUrl of ["http://127.0.0.1:20128/v1", "https://localhost:20128/v1", "http://[::1]:20128/v1"]) {
+      const local = structuredClone(validConfig()) as unknown as Record<string, any>;
+      local.provider.baseUrl = baseUrl;
+      delete local.provider.apiKey;
+      const result = parseConfig(local);
+      assert.equal(result.diagnostics.length, 0);
+      assert.equal(result.config?.provider.apiKey, undefined);
+    }
+
+    const remote = structuredClone(validConfig()) as unknown as Record<string, any>;
+    remote.provider.baseUrl = "https://router.example.com/v1";
+    delete remote.provider.apiKey;
+    const result = parseConfig(remote);
+    assert.equal(result.config, null);
+    assert.ok(result.diagnostics.some((item) => item.includes("required for non-loopback")));
+  });
+
   it("rejects built-in and non-9Router provider namespaces", () => {
     for (const providerId of ["openai", "anthropic", "my-gateway"]) {
       const raw = structuredClone(validConfig()) as unknown as Record<string, any>;

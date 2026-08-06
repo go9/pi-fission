@@ -21,10 +21,9 @@ This repository does not modify Pi settings. After reviewing the package, refere
 ```bash
 mkdir -p ~/.pi/agent/extensions
 cp examples/pi-fusion.config.example.json ~/.pi/agent/extensions/pi-fusion.json
-export NINE_ROUTER_API_KEY='your-local-9router-key'
 ```
 
-The example targets `http://127.0.0.1:20128/v1`; adjust `provider.baseUrl` for the local 9Router OpenAI-compatible base URL. `provider.id` must be `9router` or a `9router-*`/`9router_*`/`9router.*` namespace so the package cannot replace Pi's built-in providers. `provider.apiKey` must remain an environment-variable reference such as `$NINE_ROUTER_API_KEY`. Literal credentials are rejected. The extension passes that reference to Pi's provider registry and resolves it only in memory for catalogue discovery.
+The example targets the default keyless local 9Router endpoint at `http://127.0.0.1:20128/v1`. Omitting `provider.apiKey` is accepted only for loopback hosts (`127.0.0.1`, `localhost`, or `::1`); Pi receives a non-secret `local` sentinel because its provider registry requires a value, while catalogue discovery sends no Authorization header. For any non-loopback endpoint, set `provider.apiKey` to an environment-variable reference such as `$NINE_ROUTER_API_KEY` and export that variable before launching Pi. Literal credentials are always rejected, and a configured but missing environment variable is reported as an authentication error. `provider.id` must be `9router` or a `9router-*`/`9router_*`/`9router.*` namespace so the package cannot replace Pi's built-in providers.
 
 The shipped mappings match the observed local combos `fusion-explore`, `fusion-plan`, `fusion-research`, `fusion-reviewer`, `fusion-sidekick`, and `fusion-small`. 9Router does not currently expose an observed vision combo, so `fusion-vision` is an explicit user-created placeholder. Until that combo is created and discovered, `/fusion-config` reports `pi-vision` unresolved and vision tasks produce `no-eligible-profile`; the extension does not pretend a text-only combo supports images.
 

@@ -28,6 +28,26 @@ describe("9Router discovery integration", () => {
     }
   });
 
+  it("discovers a keyless loopback catalogue without sending Authorization", async () => {
+    const mock = await listen((request, response) => {
+      assert.equal(request.headers.authorization, undefined);
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ data: [
+        { id: "pi-fast" }, { id: "pi-code" }, { id: "pi-reason" },
+        { id: "pi-review" }, { id: "pi-research" }, { id: "pi-vision" },
+      ] }));
+    });
+    try {
+      const base = validConfig();
+      const config = validConfig({ provider: { ...base.provider, baseUrl: mock.baseUrl, apiKey: undefined } });
+      const result = await discoverModels(config, { env: {} });
+      assert.equal(result.status, "ready");
+      assert.equal(result.models.length, 6);
+    } finally {
+      await mock.close();
+    }
+  });
+
   it("known discovered limits constrain configured capability floors conservatively", async () => {
     const mock = await listen((_request, response) => {
       response.setHeader("content-type", "application/json");

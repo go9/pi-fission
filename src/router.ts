@@ -142,12 +142,16 @@ export async function discoverModels(
   if (!config.enabled) return emptyResult("disabled", "extension is disabled");
 
   const apiKey = resolveApiKey(config.provider.apiKey, options.env);
-  if (!apiKey) return emptyResult("auth", "API key environment variable is not set");
+  if (config.provider.apiKey && !apiKey) {
+    return emptyResult("auth", "API key environment variable is not set");
+  }
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
   let response: Response;
   try {
     response = await (options.fetch ?? fetch)(modelsUrl(config.provider.baseUrl), {
-      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+      headers,
       signal: AbortSignal.timeout(config.provider.timeoutMs),
     });
   } catch (error) {

@@ -193,6 +193,29 @@ describe("Pi observer extension shadow mode", () => {
     }
   });
 
+  it("registers a keyless loopback provider with only a non-secret local sentinel", async () => {
+    const mock = await listen((request, response) => {
+      assert.equal(request.headers.authorization, undefined);
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ data: [
+        { id: "pi-fast" }, { id: "pi-code" }, { id: "pi-reason" },
+        { id: "pi-review" }, { id: "pi-research" }, { id: "pi-vision" },
+      ] }));
+    });
+    const base = validConfig();
+    const config = validConfig({ provider: { ...base.provider, baseUrl: mock.baseUrl, apiKey: undefined } });
+    const { path: configPath } = await writeConfig(config);
+    const runtime = fakeApi();
+    try {
+      await createFusionExtension(runtime.api, { configPath, env: {} });
+      assert.equal(runtime.providers.length, 1);
+      assert.equal(runtime.providers[0]?.provider.apiKey, "local");
+      assert.equal(runtime.providers[0]?.provider.authHeader, true);
+    } finally {
+      await mock.close();
+    }
+  });
+
   it("registers only the namespaced 9Router provider fallback when discovery is unavailable", async () => {
     const config = validConfig({ provider: { ...validConfig().provider, baseUrl: "http://127.0.0.1:1/v1", timeoutMs: 50 } });
     const { path: configPath } = await writeConfig(config);

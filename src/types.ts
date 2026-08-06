@@ -32,7 +32,7 @@ export interface FusionConfig {
   provider: {
     id: string;
     baseUrl: string;
-    apiKey: string;
+    apiKey?: string;
     timeoutMs: number;
   };
   profiles: Record<CanonicalProfile, ProfileConfig>;

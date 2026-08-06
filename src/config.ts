@@ -28,6 +28,17 @@ function isProfile(value: string): value is CanonicalProfile {
   return (CANONICAL_PROFILES as readonly string[]).includes(value);
 }
 
+function isLoopbackUrl(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:")
+      && ["127.0.0.1", "localhost", "[::1]", "::1"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function parseCapabilities(value: unknown, path: string, errors: string[]): Capabilities | null {
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
@@ -76,7 +87,11 @@ export function parseConfig(value: unknown): { config: FusionConfig | null; diag
         errors.push("provider.baseUrl must be an http(s) URL");
       }
     }
-    if (typeof provider.apiKey !== "string" || !/^\$[A-Z_][A-Z0-9_]*$/i.test(provider.apiKey)) {
+    if (provider.apiKey === undefined) {
+      if (!isLoopbackUrl(provider.baseUrl)) {
+        errors.push("provider.apiKey is required for non-loopback endpoints and must reference an environment variable");
+      }
+    } else if (typeof provider.apiKey !== "string" || !/^\$[A-Z_][A-Z0-9_]*$/i.test(provider.apiKey)) {
       errors.push("provider.apiKey must be an environment-variable reference such as $NINE_ROUTER_API_KEY");
     }
     if (!Number.isInteger(provider.timeoutMs) || (provider.timeoutMs as number) < 50 || (provider.timeoutMs as number) > 30_000) {
@@ -145,7 +160,7 @@ export function parseConfig(value: unknown): { config: FusionConfig | null; diag
       provider: {
         id: provider.id as string,
         baseUrl: (provider.baseUrl as string).replace(/\/$/, ""),
-        apiKey: provider.apiKey as string,
+        ...(provider.apiKey !== undefined ? { apiKey: provider.apiKey as string } : {}),
         timeoutMs: provider.timeoutMs as number,
       },
       profiles: parsedProfiles,
@@ -191,6 +206,6 @@ export async function loadConfig(path = defaultConfigPath()): Promise<ConfigResu
   return { status: "ready", path, config: parsed.config, diagnostics: [] };
 }
 
-export function resolveApiKey(reference: string, env: NodeJS.ProcessEnv = process.env): string | null {
-  return env[reference.slice(1)]?.trim() || null;
+export function resolveApiKey(reference: string | undefined, env: NodeJS.ProcessEnv = process.env): string | null {
+  return reference ? env[reference.slice(1)]?.trim() || null : null;
 }

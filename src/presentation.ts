@@ -101,5 +101,8 @@ export function formatConfig(view: FusionView): string {
   const unresolved = view.discovery?.unresolvedProfiles.length
     ? ` · unresolved ${view.discovery.unresolvedProfiles.join(",")}`
     : "";
-  return `fusion config: shadow · ready · path ${view.config.path} · provider ${config.provider.id} · profiles ${Object.keys(config.profiles).length} · aliases ${Object.keys(config.aliases).length} · discovery ${discovery}${unresolved} · API key env reference configured (value hidden)`;
+  const authentication = config.provider.apiKey
+    ? "API key env reference configured (value hidden)"
+    : "keyless loopback authentication";
+  return `fusion config: shadow · ready · path ${view.config.path} · provider ${config.provider.id} · profiles ${Object.keys(config.profiles).length} · aliases ${Object.keys(config.aliases).length} · discovery ${discovery}${unresolved} · ${authentication}`;
 }

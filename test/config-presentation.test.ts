@@ -54,6 +54,18 @@ describe("config diagnostics", () => {
     const result = parseConfig(remote);
     assert.equal(result.config, null);
     assert.ok(result.diagnostics.some((item) => item.includes("required for non-loopback")));
+
+    const localResult = parseConfig({
+      ...validConfig(),
+      provider: { ...validConfig().provider, baseUrl: "http://127.0.0.1:20128/v1", apiKey: undefined },
+    });
+    assert.ok(localResult.config);
+    const localView: FusionView = {
+      config: { status: "ready", path: "/safe/pi-fusion.json", config: localResult.config, diagnostics: [] },
+      discovery: readyDiscovery(), classification: null, recommendation: null, activeModel: null,
+    };
+    assert.match(formatConfig(localView), /keyless loopback authentication/);
+    assert.doesNotMatch(formatConfig(localView), /env reference configured/);
   });
 
   it("rejects built-in and non-9Router provider namespaces", () => {

@@ -11,6 +11,7 @@ export type CanonicalProfile = (typeof CANONICAL_PROFILES)[number];
 export type Phase = "explore" | "implement" | "plan" | "review" | "research" | "vision" | "unknown";
 export type Complexity = "low" | "medium" | "high" | "unknown";
 export type Risk = "low" | "medium" | "high" | "protected" | "unknown";
+export type ActiveModelCategory = CanonicalProfile | "external" | "unknown";
 
 export interface Capabilities {
   tools: boolean;

@@ -63,8 +63,8 @@ export function parseConfig(value: unknown): { config: FusionConfig | null; diag
   if (!isRecord(provider)) {
     errors.push("provider must be an object");
   } else {
-    if (typeof provider.id !== "string" || !/^[a-z0-9][a-z0-9._-]*$/i.test(provider.id)) {
-      errors.push("provider.id must be a non-empty logical identifier");
+    if (typeof provider.id !== "string" || !/^9router(?:[._-][a-z0-9][a-z0-9._-]*)?$/i.test(provider.id)) {
+      errors.push("provider.id must be 9router or a 9router-prefixed identifier such as 9router-local");
     }
     if (typeof provider.baseUrl !== "string") {
       errors.push("provider.baseUrl must be an http(s) URL");
@@ -160,8 +160,9 @@ export function parseConfig(value: unknown): { config: FusionConfig | null; diag
   };
 }
 
-export function defaultConfigPath(): string {
-  return join(getAgentDir(), "extensions", "pi-fusion.json");
+export function defaultConfigPath(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.PI_FUSION_CONFIG_PATH?.trim();
+  return override || join(getAgentDir(), "extensions", "pi-fusion.json");
 }
 
 export function telemetryPath(configPath: string, config: FusionConfig): string {

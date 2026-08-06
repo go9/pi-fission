@@ -1,6 +1,9 @@
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
-import type { Classification, Phase, Recommendation } from "./types.ts";
+import type { ActiveModelCategory, Classification, Phase, Recommendation } from "./types.ts";
+import { CANONICAL_PROFILES } from "./types.ts";
 
 const PHASES = new Set<Phase>(["explore", "implement", "plan", "review", "research", "vision", "unknown"]);
 const REASON_CODES = new Set([
@@ -11,10 +14,8 @@ const REASON_CODES = new Set([
   "provider.unavailable",
   "policy.low-confidence", "policy.no-eligible-profile", "policy.preferred", "policy.capability-fallback",
 ]);
-const PROFILES = new Set(["pi-fast", "pi-code", "pi-reason", "pi-review", "pi-research", "pi-vision"]);
-// Logical model IDs are normalized lowercase identifiers. Rejecting other strings
-// prevents arbitrary host/account/credential text from entering the telemetry field.
-const IDENTIFIER = /^[a-z0-9][a-z0-9._:/-]{0,127}$/;
+const PROFILES = new Set<string>(CANONICAL_PROFILES);
+const ACTIVE_MODEL_CATEGORIES = new Set<string>([...CANONICAL_PROFILES, "external", "unknown"]);
 
 export interface AggregateUsage {
   inputTokens?: number;
@@ -31,7 +32,7 @@ export interface TelemetryRecord {
   recommendedProfile: string | null;
   reasonCodes: string[];
   confidence: number;
-  activeModel: string | null;
+  activeModelCategory: ActiveModelCategory;
   usage: AggregateUsage;
   durationMs: number | null;
   outcome: "success" | "error" | "unknown";
@@ -41,8 +42,10 @@ function finiteNonNegative(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-export function sanitizeIdentifier(value: unknown): string | null {
-  return typeof value === "string" && IDENTIFIER.test(value) ? value : null;
+export function sanitizeActiveModelCategory(value: unknown): ActiveModelCategory {
+  return typeof value === "string" && ACTIVE_MODEL_CATEGORIES.has(value)
+    ? value as ActiveModelCategory
+    : "unknown";
 }
 
 export function sanitizeUsage(value: unknown): AggregateUsage {
@@ -74,7 +77,7 @@ export function mergeUsage(left: AggregateUsage, right: AggregateUsage): Aggrega
 export function createTelemetryRecord(input: {
   classification: Classification;
   recommendation: Recommendation;
-  activeModel?: unknown;
+  activeModelCategory?: unknown;
   usage?: unknown;
   durationMs?: unknown;
   outcome?: unknown;
@@ -89,7 +92,7 @@ export function createTelemetryRecord(input: {
       : null,
     reasonCodes: [...new Set(input.recommendation.reasonCodes.filter((code) => REASON_CODES.has(code)))].slice(0, 8),
     confidence: Math.max(0, Math.min(1, finiteNonNegative(input.recommendation.confidence) ?? 0)),
-    activeModel: sanitizeIdentifier(input.activeModel),
+    activeModelCategory: sanitizeActiveModelCategory(input.activeModelCategory),
     usage: sanitizeUsage(input.usage),
     durationMs: finiteNonNegative(input.durationMs) ?? null,
     outcome: input.outcome === "success" || input.outcome === "error" ? input.outcome : "unknown",
@@ -107,10 +110,23 @@ function isTelemetryRecord(value: unknown): value is TelemetryRecord {
     && Array.isArray(item.reasonCodes)
     && item.reasonCodes.every((reason) => typeof reason === "string" && REASON_CODES.has(reason))
     && typeof item.confidence === "number"
-    && (item.activeModel === null || sanitizeIdentifier(item.activeModel) === item.activeModel)
+    && sanitizeActiveModelCategory(item.activeModelCategory) === item.activeModelCategory
     && typeof item.usage === "object"
     && (item.durationMs === null || finiteNonNegative(item.durationMs) !== undefined)
     && (item.outcome === "success" || item.outcome === "error" || item.outcome === "unknown");
+}
+
+async function assertSafeRegularFile(path: string): Promise<boolean> {
+  try {
+    const stats = await lstat(path);
+    if (stats.isSymbolicLink()) throw new Error("telemetry path must not be a symbolic link");
+    if (!stats.isFile()) throw new Error("telemetry path must be a regular file");
+    await chmod(path, 0o600);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 export class TelemetryStore {
@@ -126,13 +142,20 @@ export class TelemetryStore {
   record(record: TelemetryRecord): Promise<void> {
     this.#queue = this.#queue.then(async () => {
       await mkdir(dirname(this.path), { recursive: true });
-      await appendFile(this.path, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
-      const lines = await this.#readLines();
-      if (lines.length > this.maxEntries) {
-        const tempPath = `${this.path}.tmp`;
-        await writeFile(tempPath, `${lines.slice(-this.maxEntries).join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
-        await rename(tempPath, this.path);
+      await assertSafeRegularFile(this.path);
+      const handle = await open(
+        this.path,
+        constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW,
+        0o600,
+      );
+      try {
+        await handle.chmod(0o600);
+        await handle.writeFile(`${JSON.stringify(record)}\n`, "utf8");
+      } finally {
+        await handle.close();
       }
+      const lines = await this.#readLines();
+      if (lines.length > this.maxEntries) await this.#replace(`${lines.slice(-this.maxEntries).join("\n")}\n`);
     });
     return this.#queue;
   }
@@ -151,12 +174,33 @@ export class TelemetryStore {
     return records.slice(-Math.max(0, limit));
   }
 
-  async #readLines(): Promise<string[]> {
+  async #replace(content: string): Promise<void> {
+    const tempPath = `${this.path}.tmp-${process.pid}-${randomUUID()}`;
+    const handle = await open(
+      tempPath,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+      0o600,
+    );
     try {
-      return (await readFile(this.path, "utf8")).split("\n").filter(Boolean);
+      await handle.chmod(0o600);
+      await handle.writeFile(content, "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      await handle.close();
+      await unlink(tempPath).catch(() => undefined);
       throw error;
+    }
+    await handle.close();
+    await rename(tempPath, this.path);
+    await chmod(this.path, 0o600);
+  }
+
+  async #readLines(): Promise<string[]> {
+    if (!await assertSafeRegularFile(this.path)) return [];
+    const handle = await open(this.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      return (await handle.readFile("utf8")).split("\n").filter(Boolean);
+    } finally {
+      await handle.close();
     }
   }
 }

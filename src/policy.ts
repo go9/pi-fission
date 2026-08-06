@@ -40,14 +40,16 @@ export interface PolicyInput {
   classification: Classification;
   config: FusionConfig;
   resolvedModels: Partial<Record<CanonicalProfile, string>>;
+  effectiveCapabilities?: Partial<Record<CanonicalProfile, Capabilities>>;
   providerReady: boolean;
 }
 
 export function recommend(input: PolicyInput): Recommendation {
-  const { classification, config, resolvedModels, providerReady } = input;
+  const { classification, config, resolvedModels, effectiveCapabilities, providerReady } = input;
   const evaluations = CANONICAL_PROFILES.map((profile) => {
     const modelId = resolvedModels[profile] ?? config.profiles[profile].modelId;
-    const gaps = capabilityGaps(classification.requiredCapabilities, config.profiles[profile].capabilities);
+    const available = effectiveCapabilities?.[profile] ?? config.profiles[profile].capabilities;
+    const gaps = capabilityGaps(classification.requiredCapabilities, available);
     if (!resolvedModels[profile]) gaps.unshift("model.unavailable");
     return { profile, modelId, eligible: gaps.length === 0, reasons: gaps };
   });

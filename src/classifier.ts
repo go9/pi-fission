@@ -95,6 +95,28 @@ export function classify(input: ClassifierInput): Classification {
   return result("unknown", "unknown", "unknown", 0.25, [text ? "input.ambiguous" : "input.empty"], requirements({}));
 }
 
+export function mergeCapabilityRequirements(left: Capabilities, right: Capabilities): Capabilities {
+  return {
+    tools: left.tools || right.tools,
+    reasoning: left.reasoning || right.reasoning,
+    image: left.image || right.image,
+    structuredOutput: left.structuredOutput || right.structuredOutput,
+    contextWindow: Math.max(left.contextWindow, right.contextWindow),
+  };
+}
+
+const RISK_RANK: Record<Classification["risk"], number> = {
+  unknown: 0,
+  low: 1,
+  medium: 2,
+  high: 3,
+  protected: 4,
+};
+
+function strongerRisk(left: Classification["risk"], right: Classification["risk"]): Classification["risk"] {
+  return RISK_RANK[left] >= RISK_RANK[right] ? left : right;
+}
+
 export function observeToolPhase(current: Classification, toolName: string): Classification {
   const normalized = toolName.toLowerCase();
   let phase: Phase | null = null;
@@ -109,7 +131,8 @@ export function observeToolPhase(current: Classification, toolName: string): Cla
   return {
     ...observed,
     confidence: Math.max(0.7, Math.min(current.confidence, 0.85)),
-    risk: current.risk === "protected" ? "protected" : observed.risk,
-    reasonCodes: [...new Set([...current.reasonCodes.filter((code) => code.startsWith("risk.")), `observed.${phase}`])],
+    risk: strongerRisk(current.risk, observed.risk),
+    requiredCapabilities: mergeCapabilityRequirements(current.requiredCapabilities, observed.requiredCapabilities),
+    reasonCodes: [...new Set([...current.reasonCodes, `observed.${phase}`])],
   };
 }

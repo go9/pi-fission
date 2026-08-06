@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { classify } from "../src/classifier.ts";
+import { classify, observeToolPhase } from "../src/classifier.ts";
 import { recommend } from "../src/policy.ts";
 import type { CanonicalProfile } from "../src/types.ts";
 import { validConfig } from "../test-support/helpers.ts";
@@ -41,6 +41,26 @@ describe("deterministic classifier and policy", () => {
     assert.equal(route.profile, null);
     assert.equal(route.retainCurrentModel, true);
     assert.ok(route.reasonCodes.includes("policy.low-confidence"));
+  });
+
+  it("tool observations merge requirements monotonically and preserve protected risk", () => {
+    const protectedVision = classify({
+      text: "Review this authentication screenshot with structured validation",
+      imageCount: 1,
+    });
+    assert.equal(protectedVision.risk, "protected");
+    assert.equal(protectedVision.requiredCapabilities.image, true);
+    const afterEdit = observeToolPhase(protectedVision, "edit");
+    assert.equal(afterEdit.phase, "implement");
+    assert.equal(afterEdit.risk, "protected");
+    assert.equal(afterEdit.requiredCapabilities.image, true);
+    assert.equal(afterEdit.requiredCapabilities.structuredOutput, true);
+    assert.equal(afterEdit.requiredCapabilities.tools, true);
+    assert.ok(afterEdit.requiredCapabilities.contextWindow >= protectedVision.requiredCapabilities.contextWindow);
+    const afterReview = observeToolPhase(afterEdit, "review");
+    assert.equal(afterReview.requiredCapabilities.image, true);
+    assert.equal(afterReview.requiredCapabilities.structuredOutput, true);
+    assert.equal(afterReview.risk, "protected");
   });
 });
 

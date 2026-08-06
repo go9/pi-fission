@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "enabled": true,
+  "provider": {
+    "id": "9router",
+    "baseUrl": "http://127.0.0.1:20128/v1",
+    "apiKey": "$NINE_ROUTER_API_KEY",
+    "timeoutMs": 2000
+  },
+  "profiles": {
+    "pi-fast": { "modelId": "pi-fast", "capabilities": { "tools": true, "reasoning": false, "image": false, "structuredOutput": false, "contextWindow": 64000 } },
+    "pi-code": { "modelId": "pi-code", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": true, "contextWindow": 128000 } },
+    "pi-reason": { "modelId": "pi-reason", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": true, "contextWindow": 200000 } },
+    "pi-review": { "modelId": "pi-review", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": true, "contextWindow": 200000 } },
+    "pi-research": { "modelId": "pi-research", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": false, "contextWindow": 200000 } },
+    "pi-vision": { "modelId": "pi-vision", "capabilities": { "tools": true, "reasoning": true, "image": true, "structuredOutput": false, "contextWindow": 128000 } }
+  },
+  "aliases": {
+    "plan": "pi-reason",
+    "sidekick": "pi-code",
+    "explore": "pi-fast",
+    "small-model": "pi-fast"
+  },
+  "telemetry": {
+    "enabled": true,
+    "file": "pi-fusion.telemetry.jsonl",
+    "maxEntries": 200
+  }
+}

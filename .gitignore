@@ -1,0 +1,4 @@
+node_modules/
+*.tgz
+.pi-subagents/
+.pi-fusion.telemetry.jsonl

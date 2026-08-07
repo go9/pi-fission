@@ -1,18 +1,22 @@
 # pi-fusion
 
-`pi-fusion` is a standalone Pi package that observes a parent Pi session and recommends a semantic 9Router profile. It remains **shadow mode by default**. The only active path is an explicit, in-memory `/fusion-route-once` arm for exactly the next eligible task; after that full agent run settles, Pi Fusion restores the exact model and thinking preference that were active before the test. Pi Fusion does not choose or route thinking levels: Pi may temporarily clamp the current preference when the one-shot changes models, and Fusion restores it unless the user explicitly selects a different level. It never delegates work, changes prompts or tool results, edits project files, or changes workflow/release state.
+`pi-fusion` is a standalone Pi package implementing the **full-product control plane**: it classifies coding work, routes each request and workflow phase to a semantic 9Router profile, orchestrates the software-delivery lifecycle, delegates only when fresh context or independent/parallel work is valuable, and learns from outcomes through permission-gated tuning proposals.
 
-Canonical profiles are `pi-fast`, `pi-code`, `pi-reason`, `pi-review`, `pi-research`, and `pi-vision`. Configurable aliases let a 9Router catalogue expose names such as `plan`, `sidekick`, `explore`, or `small-model` while policy remains canonical and capability checked.
+**Status: in development.** This checkout is a vertical slice of Flicker ticket #1485. The current head implements the setup gate (seven fixed profiles, real inference probes, active-readiness blocking), the v2 config with migration, the typed workflow runtime with plan approval and session ownership, permission-gated tuning proposals, and the active/shadow/off mode surface. Persistent auto-routing, the Flicker adapter, and the pi-subagents execution adapter are the next vertical slices. The README and product are not described as complete until the parent acceptance matrix passes.
 
 ## Package layout
 
 - `extensions/pi-fusion.ts` — the single Pi extension entry point.
-- `src/classifier.ts` — pure deterministic task/phase/risk/capability classification.
+- `src/classifier.ts` — pure deterministic task/phase/risk/capability/mutation-intent classification.
 - `src/policy.ts` — pure stable routing policy and capability-floor enforcement.
 - `src/router.ts` — OpenAI-compatible `/models` discovery with bounded failures.
-- `src/extension.ts` — Pi lifecycle observer, provider registration, commands, and bounded one-shot model selection/restoration.
+- `src/setup.ts` — seven-profile mapping diagnostics, real minimal inference probes, active-readiness gating.
+- `src/workflow.ts` — typed coding-workflow planner/runtime, approval envelope, session store, ownership warnings.
+- `src/tuning.ts` — content-free outcome records, evidence-gated proposals, permissioned future-only application and rollback.
+- `src/flicker-adapter.ts` — Flicker project resolution, ticket/document/status projection.
+- `src/extension.ts` — Pi lifecycle observer, provider registration, commands, mode surface, and bounded model selection/restoration.
 - `src/telemetry.ts` — bounded content-free JSONL records.
-- `src/presentation.ts` — compact shadow-labelled status and explanations.
+- `src/presentation.ts` — compact mode/status/explain/history/setup/workflow surfaces.
 
 ## Local setup
 
@@ -25,72 +29,45 @@ cp examples/pi-fusion.config.example.json ~/.pi/agent/extensions/pi-fusion.json
 
 The example targets the default keyless local 9Router endpoint at `http://127.0.0.1:20128/v1`. Omitting `provider.apiKey` is accepted only for loopback hosts (`127.0.0.1`, `localhost`, or `::1`); Pi receives a non-secret `local` sentinel because its provider registry requires a value, while catalogue discovery sends no Authorization header. For any non-loopback endpoint, set `provider.apiKey` to an environment-variable reference such as `$NINE_ROUTER_API_KEY` and export that variable before launching Pi. Literal credentials are always rejected, and a configured but missing environment variable is reported as an authentication error. `provider.id` must be `9router` or a `9router-*`/`9router_*`/`9router.*` namespace so the package cannot replace Pi's built-in providers.
 
-The shipped mappings match the observed local combos `fusion-explore`, `fusion-plan`, `fusion-research`, `fusion-reviewer`, `fusion-sidekick`, and `fusion-small`. 9Router does not currently expose an observed vision combo, so `fusion-vision` is an explicit user-created placeholder. Until that combo is created and discovered, `/fusion-config` reports `pi-vision` unresolved and vision tasks produce `no-eligible-profile`; the extension does not pretend a text-only combo supports images.
+The shipped mappings match the observed local combos `fusion-explore`, `fusion-plan`, `fusion-research`, `fusion-reviewer`, `fusion-sidekick`, and `fusion-small`; `fusion-vision` and `fusion-design` are explicit user-created placeholders until those combos exist.
 
-To try a reviewed local checkout without installing globally:
+## Configuration (v2)
 
-```bash
-pi -e /absolute/path/to/pi-fusion
-```
+The seven canonical profiles are `fast`, `code`, `reason`, `review`, `research`, `vision`, and `design`. Each maps to a logical Pi model ID (typically a 9Router combo) and explicitly declares tools, reasoning, image, structured-output, and context-window floors. Global mappings plus per-repository `projectOverrides` are supported; multiple profiles may share one model/combo.
 
-No global install, package publication, or global Pi settings change is performed by this repository.
+`version: 1` configurations are migrated automatically to v2 with a `shadow` default and a conservative `design` entry; active mode is never inferred from a legacy config. `mode` is `off`, `shadow`, or `active`:
 
-## Configuration
+- `off` — Pi Fusion is inert.
+- `shadow` — observe, classify, and recommend; never change models or workflow state.
+- `active` — after setup readiness, route requests and drive managed workflows.
 
-All six canonical profiles are required. Each maps to a logical 9Router model ID and explicitly declares:
+Active mode requires setup readiness: all seven profiles mapped, capability-compatible, authenticated (or valid keyless loopback), and successfully probed. Any probe failure blocks active with exact remediation; partial setup is never ready.
 
-- tool support;
-- reasoning support;
-- image support;
-- structured-output support;
-- context window.
+## Commands
 
-A recommendation is eligible only when every required floor is met and the logical model was discovered. Explicit capability fields returned by 9Router constrain configured claims: known false modalities/features and known lower context limits win conservatively, while fields omitted by discovery retain the explicit configured floor. Unknown prompts retain the active Pi model at low confidence. A high-confidence request with no eligible profile is reported separately as `no-eligible-profile`. An unavailable or invalid catalogue is visible and non-fatal; structurally valid explicit model IDs are still registered as a provider catalogue fallback, but shadow recommendations remain unavailable until discovery succeeds.
-
-Aliases are merged over the built-in examples and may point only to canonical profiles. Telemetry filenames are restricted to the same extension config directory.
-
-## Pi UX
-
-Every route surface distinguishes a recommendation from Pi's actual active model and labels the runtime as shadow, one-shot armed, applied, skipped, restored, restore-failed, or user-overrode:
-
+- `/fusion-setup` — validate profile targets and run a real minimal inference probe through every profile; gates active readiness.
+- `/fusion-setup-status` — setup state and per-profile probe results.
+- `/fusion-mode [off|shadow|active]` — show or set the mode; active is blocked until setup passes.
+- `/fusion-plan` — approve the current workflow plan (creates the versioned approval envelope and enables mutation execution).
+- `/fusion-workflow` — show the active workflow graph, node statuses, envelope, and ownership.
+- `/fusion-pause` / `/fusion-resume` / `/fusion-cancel` — workflow controls.
 - `/fusion-route-once` — explicitly arm at most the next non-command task; repeated calls never stack.
-- `/fusion-status` — ready, low-confidence, unavailable, invalid-config, and current one-shot state.
-- `/fusion-explain` — confidence, fixed reason codes, capability requirements, eligible/rejected profiles, and one-shot state.
-- `/fusion-history` — bounded recent content-free records with allow-listed one-shot status, including an explicit empty state.
-- `/fusion-config` — resolved path, shadow-default/one-shot availability, and diagnostics; credential values are never shown.
-- TUI footer — compact shadow or one-shot state.
-
-To perform one reversible active test in an interactive Pi session:
-
-```text
-/fusion-route-once
-Plan a small, clearly scoped implementation.
-/fusion-status
-```
-
-The arm is consumed before model lookup or selection, so an unavailable provider, low-confidence/no-eligible recommendation, registry miss, or selection failure cannot unexpectedly route a later prompt. A successful route is one active transaction across all tool turns, retries, and queued continuations, even when the recommended model was already current. It restores only at `agent_settled` or during normal awaited session shutdown/reload. Selecting a model yourself during the active run or a delayed restore keeps your choice final. No configuration migration or persistent active toggle exists.
-
-The extension uses no dialogs. In print/JSON modes it does not prompt or install a footer; explicit `/fusion-*` commands write safe status text to stderr so JSON stdout remains machine-readable. In RPC/TUI modes commands use Pi notifications.
+- `/fusion-status` — mode, setup, workflow, and routing health.
+- `/fusion-explain` — confidence, reason codes, capability requirements, eligible/rejected profiles, mutation intent.
+- `/fusion-history` — bounded recent content-free records.
+- `/fusion-config` — resolved path, mode, profile/alias counts, discovery, authentication type, override count; credential values are never shown.
+- `/fusion-tune-propose` — build an evidence-gated tuning proposal (never applies anything).
+- `/fusion-tune-approve` / `/fusion-tune-deny` / `/fusion-tune-rollback` — explicit human permission surface for future-only, atomic, reversible policy changes.
+- `/fusion-proposals` — list proposals with status, scope, evidence sample.
+- TUI footer — compact mode, workflow status, route, and ownership warning.
 
 ## Privacy and telemetry
 
-When enabled, telemetry is written with mode `0600` to `~/.pi/agent/extensions/pi-fusion.telemetry.jsonl` (or the configured filename) and bounded by `telemetry.maxEntries`. The schema is constructed from allow-listed fields only:
-
-- timestamp;
-- phase and recommended canonical profile;
-- fixed reason codes and confidence;
-- an allow-listed active-model category: canonical profile, `external`, or `unknown`;
-- an allow-listed one-shot route status (never a raw model id or prompt-derived value);
-- aggregate token/cost metadata when available;
-- duration and success/error/unknown outcome.
-
-Prompts, code, credentials, account identifiers, arbitrary model or private deployment identifiers, raw tool input/output, and provider response bodies have no telemetry fields and are never serialized. Existing telemetry files are forced to mode `0600`; symbolic-link and non-regular targets are rejected. The file can be deleted independently to roll back local evidence.
-
-For isolated smoke tests without changing global Pi settings, set `PI_FUSION_CONFIG_PATH` to an absolute temporary config path before loading the package. This override changes only the config read location; it does not install or activate routing.
+Fusion telemetry and tuning datasets are content-free: timestamps, phase, recommended profile, allow-listed reason codes, confidence, an allow-listed active-model category, one-shot status, aggregate usage metadata, duration, and outcome. Prompts, code, credentials, account identifiers, arbitrary model or private deployment identifiers, raw tool input/output, and provider response bodies have no fields and are never serialized. Telemetry files are forced to mode `0600`; symbolic-link and non-regular targets are rejected. Flicker evidence documents, where produced, follow the authoritative Flicker evidence contract and may include changed files and commands.
 
 ## Rollback
 
-One-shot state is memory-only. Normal Pi reload/shutdown awaits a best-effort restoration before the state disappears; to stop an armed-but-not-started test, reload Pi before submitting the next task. An uncatchable process death such as `SIGKILL`, kernel termination, or power loss cannot run the shutdown hook and may leave the routed model selected on the next launch; manually select the prior model if that occurs. To roll back the package, remove its local package entry with Pi's normal uninstall command or point that entry back to a reviewed shadow-only checkout; the extension has no project data or workflow state to migrate. Delete the telemetry JSONL independently if local routing evidence should be removed.
+Keep the last-good profile config, setup state, workflow store, and tuning proposals; every migration and tuning application is atomic and reversible. Normal Pi reload/shutdown awaits best-effort restoration. Remove the package with Pi's normal uninstall command; the extension has no project data to migrate. Delete telemetry/tuning files independently if local evidence should be removed.
 
 ## Development
 
@@ -103,4 +80,4 @@ PATH="$HOME/.local/share/mise/installs/node/24.6.0/bin:$PATH" npm run test:integ
 PATH="$HOME/.local/share/mise/installs/node/24.6.0/bin:$PATH" npm pack --dry-run
 ```
 
-The tests use only Node's built-in test runner and local mock HTTP servers; they consume no live subscription allowance.
+The tests use only Node's built-in test runner and local mock HTTP servers; they consume no live subscription allowance except the explicitly authorized setup probe protocol.

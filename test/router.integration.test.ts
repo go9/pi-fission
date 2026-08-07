@@ -14,14 +14,14 @@ describe("9Router discovery integration", () => {
       assert.equal(request.headers.authorization, "Bearer test-key-that-must-never-appear");
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ data: [
-        { id: "pi-fast" }, { id: "pi-code" }, { id: "plan" }, { id: "pi-review" }, { id: "pi-research" }, { id: "pi-vision" },
+        { id: "fast" }, { id: "code" }, { id: "plan" }, { id: "review" }, { id: "research" }, { id: "vision" }, { id: "design" },
       ] }));
     });
     try {
       const result = await discoverModels(validConfig({ provider: { ...validConfig().provider, baseUrl: mock.baseUrl } }), { env });
       assert.equal(result.status, "ready");
-      assert.equal(result.resolvedProfiles["pi-reason"], "plan");
-      assert.equal(result.resolvedProfiles["pi-fast"], "pi-fast");
+      assert.equal(result.resolvedProfiles["reason"], "plan");
+      assert.equal(result.resolvedProfiles["fast"], "fast");
       assert.doesNotMatch(result.diagnostic, /test-key/);
     } finally {
       await mock.close();
@@ -33,8 +33,8 @@ describe("9Router discovery integration", () => {
       assert.equal(request.headers.authorization, undefined);
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ data: [
-        { id: "pi-fast" }, { id: "pi-code" }, { id: "pi-reason" },
-        { id: "pi-review" }, { id: "pi-research" }, { id: "pi-vision" },
+        { id: "fast" }, { id: "code" }, { id: "reason" },
+        { id: "review" }, { id: "research" }, { id: "vision" }, { id: "design" },
       ] }));
     });
     try {
@@ -42,7 +42,7 @@ describe("9Router discovery integration", () => {
       const config = validConfig({ provider: { ...base.provider, baseUrl: mock.baseUrl, apiKey: undefined } });
       const result = await discoverModels(config, { env: {} });
       assert.equal(result.status, "ready");
-      assert.equal(result.models.length, 6);
+      assert.equal(result.models.length, 7);
     } finally {
       await mock.close();
     }
@@ -52,23 +52,24 @@ describe("9Router discovery integration", () => {
     const mock = await listen((_request, response) => {
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ data: [
-        { id: "pi-fast" },
-        { id: "pi-code", context_window: 32_000, input: ["text"], supports_tools: true, supports_reasoning: true, supports_structured_output: false },
-        { id: "pi-reason" }, { id: "pi-review" }, { id: "pi-research" },
-        { id: "pi-vision", context_window: 64_000, modalities: { input: ["text"] } },
+        { id: "fast" },
+        { id: "code", context_window: 32_000, input: ["text"], supports_tools: true, supports_reasoning: true, supports_structured_output: false },
+        { id: "reason" }, { id: "review" }, { id: "research" },
+        { id: "vision", context_window: 64_000, modalities: { input: ["text"] } },
+        { id: "design" },
       ] }));
     });
     try {
       const config = validConfig({ provider: { ...validConfig().provider, baseUrl: mock.baseUrl } });
       const result = await discoverModels(config, { env });
       assert.equal(result.status, "ready");
-      assert.deepEqual(result.effectiveCapabilities["pi-code"], {
-        ...config.profiles["pi-code"].capabilities,
+      assert.deepEqual(result.effectiveCapabilities["code"], {
+        ...config.profiles["code"].capabilities,
         structuredOutput: false,
         contextWindow: 32_000,
       });
-      assert.equal(result.effectiveCapabilities["pi-vision"]?.image, false);
-      assert.equal(result.effectiveCapabilities["pi-reason"]?.contextWindow, 200_000, "unknown discovered fields retain explicit configured floors");
+      assert.equal(result.effectiveCapabilities["vision"]?.image, false);
+      assert.equal(result.effectiveCapabilities["reason"]?.contextWindow, 128_000, "unknown discovered fields retain explicit configured floors");
       const route = recommend({
         classification: classify({ text: "implement a TypeScript change" }),
         config,
@@ -76,7 +77,7 @@ describe("9Router discovery integration", () => {
         effectiveCapabilities: result.effectiveCapabilities,
         providerReady: true,
       });
-      const code = route.evaluations.find((entry) => entry.profile === "pi-code");
+      const code = route.evaluations.find((entry) => entry.profile === "code");
       assert.ok(code?.reasons.includes("capability.structured-output"));
       assert.ok(code?.reasons.includes("capability.context-window"));
     } finally {
@@ -89,7 +90,7 @@ describe("9Router discovery integration", () => {
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ data: [
         { id: "fusion-explore" }, { id: "fusion-plan" }, { id: "fusion-research" },
-        { id: "fusion-reviewer" }, { id: "fusion-sidekick" }, { id: "fusion-small" },
+        { id: "fusion-reviewer" }, { id: "fusion-sidekick" }, { id: "fusion-small" }, { id: "fusion-design" },
       ] }));
     });
     try {
@@ -98,17 +99,18 @@ describe("9Router discovery integration", () => {
         provider: { ...base.provider, baseUrl: mock.baseUrl },
         profiles: {
           ...base.profiles,
-          "pi-fast": { ...base.profiles["pi-fast"], modelId: "fusion-explore" },
-          "pi-code": { ...base.profiles["pi-code"], modelId: "fusion-sidekick" },
-          "pi-reason": { ...base.profiles["pi-reason"], modelId: "fusion-plan" },
-          "pi-review": { ...base.profiles["pi-review"], modelId: "fusion-reviewer" },
-          "pi-research": { ...base.profiles["pi-research"], modelId: "fusion-research" },
-          "pi-vision": { ...base.profiles["pi-vision"], modelId: "fusion-vision" },
+          "fast": { ...base.profiles["fast"], modelId: "fusion-explore" },
+          "code": { ...base.profiles["code"], modelId: "fusion-sidekick" },
+          "reason": { ...base.profiles["reason"], modelId: "fusion-plan" },
+          "review": { ...base.profiles["review"], modelId: "fusion-reviewer" },
+          "research": { ...base.profiles["research"], modelId: "fusion-research" },
+          "vision": { ...base.profiles["vision"], modelId: "fusion-vision" },
+          "design": { ...base.profiles["design"], modelId: "fusion-design" },
         },
       });
       const result = await discoverModels(config, { env });
       assert.equal(result.status, "ready");
-      assert.deepEqual(result.unresolvedProfiles, ["pi-vision"]);
+      assert.deepEqual(result.unresolvedProfiles, ["vision"]);
       assert.match(result.diagnostic, /1 unresolved profile/);
     } finally {
       await mock.close();
@@ -131,7 +133,7 @@ describe("9Router discovery integration", () => {
 
   it("9Router discovery reports a timeout", async () => {
     const mock = await listen((_request, response) => {
-      setTimeout(() => response.end(JSON.stringify({ data: [{ id: "pi-fast" }] })), 150);
+      setTimeout(() => response.end(JSON.stringify({ data: [{ id: "fast" }] })), 150);
     });
     try {
       const config = validConfig({ provider: { ...validConfig().provider, baseUrl: mock.baseUrl, timeoutMs: 50 } });

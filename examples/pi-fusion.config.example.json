@@ -1,31 +1,44 @@
 {
-  "version": 1,
-  "enabled": true,
+  "version": 2,
+  "mode": "shadow",
   "provider": {
     "id": "9router",
     "baseUrl": "http://127.0.0.1:20128/v1",
     "timeoutMs": 2000
   },
   "profiles": {
-    "pi-fast": { "modelId": "fusion-explore", "capabilities": { "tools": true, "reasoning": false, "image": false, "structuredOutput": false, "contextWindow": 64000 } },
-    "pi-code": { "modelId": "fusion-sidekick", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": true, "contextWindow": 128000 } },
-    "pi-reason": { "modelId": "fusion-plan", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": true, "contextWindow": 200000 } },
-    "pi-review": { "modelId": "fusion-reviewer", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": true, "contextWindow": 200000 } },
-    "pi-research": { "modelId": "fusion-research", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": false, "contextWindow": 200000 } },
-    "pi-vision": { "modelId": "fusion-vision", "capabilities": { "tools": true, "reasoning": true, "image": true, "structuredOutput": false, "contextWindow": 128000 } }
+    "fast": { "modelId": "fusion-explore", "capabilities": { "tools": true, "reasoning": false, "image": false, "structuredOutput": false, "contextWindow": 32000 } },
+    "code": { "modelId": "fusion-sidekick", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": true, "contextWindow": 64000 } },
+    "reason": { "modelId": "fusion-plan", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": true, "contextWindow": 128000 } },
+    "review": { "modelId": "fusion-reviewer", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": true, "contextWindow": 128000 } },
+    "research": { "modelId": "fusion-research", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": false, "contextWindow": 128000 } },
+    "vision": { "modelId": "fusion-vision", "capabilities": { "tools": true, "reasoning": true, "image": true, "structuredOutput": false, "contextWindow": 64000 } },
+    "design": { "modelId": "fusion-design", "capabilities": { "tools": true, "reasoning": true, "image": true, "structuredOutput": false, "contextWindow": 128000 } }
   },
   "aliases": {
-    "fusion-explore": "pi-fast",
-    "fusion-small": "pi-fast",
-    "fusion-sidekick": "pi-code",
-    "fusion-plan": "pi-reason",
-    "fusion-reviewer": "pi-review",
-    "fusion-research": "pi-research",
-    "fusion-vision": "pi-vision"
+    "plan": "reason",
+    "sidekick": "code",
+    "explore": "fast",
+    "small-model": "fast",
+    "reviewer": "review",
+    "research": "research",
+    "vision": "vision",
+    "design": "design"
   },
+  "projectOverrides": [],
   "telemetry": {
     "enabled": true,
     "file": "pi-fusion.telemetry.jsonl",
     "maxEntries": 200
+  },
+  "tuning": {
+    "enabled": true,
+    "file": "pi-fusion.tuning.jsonl",
+    "maxEntries": 200,
+    "minEvidence": 5,
+    "maxFanout": 4,
+    "maxDepth": 2,
+    "maxRetries": 3,
+    "maxSwitches": 4
   }
 }

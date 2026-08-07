@@ -1,4 +1,4 @@
-import type { Capabilities, Classification, Phase } from "./types.ts";
+import type { Capabilities, Classification, MutationIntent, Phase } from "./types.ts";
 
 const EMPTY_CAPABILITIES: Capabilities = {
   tools: false,
@@ -14,9 +14,15 @@ const RESEARCH = /\b(research|investigate|compare|upstream|documentation|docs|we
 const PLAN = /\b(plan|architect(?:ure)?|design|strategy|approach|trade-?offs?|proposal)\b/i;
 const IMPLEMENT = /\b(implement|code|fix|bug|refactor|test|build|change|add|create|typescript|javascript|python|elixir)\b/i;
 const EXPLORE = /\b(explore|inspect|look at|find|locate|list|show|understand|summari[sz]e|quick|small)\b/i;
+const CLARIFY = /\b(clarify|explain (the|what|how|why)|what does|how does|why does|tell me about)\b/i;
+const MUTATION = /\b(implement|code|fix|bug|refactor|build|change|add|create|write|edit|update|remove|delete|migrate|commit|push|merge|deploy)\b/i;
 
 function requirements(overrides: Partial<Capabilities>): Capabilities {
   return { ...EMPTY_CAPABILITIES, ...overrides };
+}
+
+function mutationIntentOf(text: string): MutationIntent {
+  return MUTATION.test(text) ? "mutation" : text ? "read-only" : "unknown";
 }
 
 function result(
@@ -26,8 +32,9 @@ function result(
   confidence: number,
   reasonCodes: string[],
   requiredCapabilities: Capabilities,
+  mutationIntent: MutationIntent,
 ): Classification {
-  return { phase, complexity, risk, confidence, reasonCodes, requiredCapabilities };
+  return { phase, complexity, risk, confidence, reasonCodes, requiredCapabilities, mutationIntent };
 }
 
 export interface ClassifierInput {
@@ -37,6 +44,7 @@ export interface ClassifierInput {
 
 export function classify(input: ClassifierInput): Classification {
   const text = input.text?.normalize("NFKC").trim() ?? "";
+  const intent = mutationIntentOf(text);
 
   if ((input.imageCount ?? 0) > 0 || /\b(image|screenshot|diagram|photo|visual|vision)\b/i.test(text)) {
     return result("vision", "medium", PROTECTED.test(text) ? "protected" : "medium", 0.98, ["input.image"], requirements({
@@ -44,7 +52,7 @@ export function classify(input: ClassifierInput): Classification {
       reasoning: true,
       image: true,
       contextWindow: 64_000,
-    }));
+    }), intent);
   }
 
   const protectedRisk = PROTECTED.test(text);
@@ -55,7 +63,7 @@ export function classify(input: ClassifierInput): Classification {
       reasoning: true,
       structuredOutput: true,
       contextWindow: 128_000,
-    }));
+    }), intent);
   }
 
   if (REVIEW.test(text)) {
@@ -64,21 +72,21 @@ export function classify(input: ClassifierInput): Classification {
       reasoning: true,
       structuredOutput: true,
       contextWindow: 128_000,
-    }));
+    }), intent);
   }
   if (RESEARCH.test(text)) {
     return result("research", "medium", "medium", 0.91, ["phase.research"], requirements({
       tools: true,
       reasoning: true,
       contextWindow: 128_000,
-    }));
+    }), intent);
   }
   if (PLAN.test(text)) {
     return result("plan", "high", "medium", 0.93, ["phase.plan"], requirements({
       reasoning: true,
       structuredOutput: true,
       contextWindow: 128_000,
-    }));
+    }), intent);
   }
   if (IMPLEMENT.test(text)) {
     return result("implement", "medium", "medium", 0.9, ["phase.implement"], requirements({
@@ -86,13 +94,16 @@ export function classify(input: ClassifierInput): Classification {
       reasoning: true,
       structuredOutput: true,
       contextWindow: 64_000,
-    }));
+    }), intent);
   }
   if (EXPLORE.test(text)) {
-    return result("explore", "low", "low", 0.87, ["phase.explore"], requirements({ tools: true, contextWindow: 32_000 }));
+    return result("explore", "low", "low", 0.87, ["phase.explore"], requirements({ tools: true, contextWindow: 32_000 }), intent);
+  }
+  if (CLARIFY.test(text)) {
+    return result("clarify", "low", "low", 0.8, ["phase.clarify"], requirements({ contextWindow: 32_000 }), intent);
   }
 
-  return result("unknown", "unknown", "unknown", 0.25, [text ? "input.ambiguous" : "input.empty"], requirements({}));
+  return result("unknown", "unknown", "unknown", 0.25, [text ? "input.ambiguous" : "input.empty"], requirements({}), intent);
 }
 
 export function mergeCapabilityRequirements(left: Capabilities, right: Capabilities): Capabilities {
@@ -134,5 +145,6 @@ export function observeToolPhase(current: Classification, toolName: string): Cla
     risk: strongerRisk(current.risk, observed.risk),
     requiredCapabilities: mergeCapabilityRequirements(current.requiredCapabilities, observed.requiredCapabilities),
     reasonCodes: [...new Set([...current.reasonCodes, `observed.${phase}`])],
+    mutationIntent: /^(edit|write|apply_patch)$/.test(normalized) ? "mutation" : current.mutationIntent,
   };
 }

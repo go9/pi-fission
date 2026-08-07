@@ -139,7 +139,7 @@ export async function discoverModels(
   config: FusionConfig,
   options: { fetch?: typeof fetch; env?: NodeJS.ProcessEnv } = {},
 ): Promise<DiscoveryResult> {
-  if (!config.enabled) return emptyResult("disabled", "extension is disabled");
+  if (config.mode === "off") return emptyResult("disabled", "extension is disabled");
 
   const apiKey = resolveApiKey(config.provider.apiKey, options.env);
   if (config.provider.apiKey && !apiKey) {

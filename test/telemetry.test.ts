@@ -8,7 +8,7 @@ import { createTelemetryRecord, TelemetryStore } from "../src/telemetry.ts";
 import type { CanonicalProfile } from "../src/types.ts";
 import { validConfig, writeConfig } from "../test-support/helpers.ts";
 
-const models = Object.fromEntries(["pi-fast", "pi-code", "pi-reason", "pi-review", "pi-research", "pi-vision"].map((id) => [id, id])) as Record<CanonicalProfile, string>;
+const models = Object.fromEntries(["fast", "code", "pi-reason", "pi-review", "pi-research", "pi-vision"].map((id) => [id, id])) as Record<CanonicalProfile, string>;
 
 describe("telemetry privacy", () => {
   it("telemetry privacy sentinels and arbitrary lowercase deployment IDs cannot enter the allow-list schema", async () => {
@@ -43,7 +43,7 @@ describe("telemetry privacy", () => {
     const store = new TelemetryStore(path, 2);
     await store.record(record);
     await store.record({ ...record, activeModelCategory: "external", timestamp: "2026-01-02T03:04:06.000Z" });
-    await store.record({ ...record, activeModelCategory: "pi-code", timestamp: "2026-01-02T03:04:07.000Z" });
+    await store.record({ ...record, activeModelCategory: "code", timestamp: "2026-01-02T03:04:07.000Z" });
     const lines = (await readFile(path, "utf8")).trim().split("\n");
     assert.equal(lines.length, 2, "history is bounded");
     assert.equal((await store.recent()).length, 2);

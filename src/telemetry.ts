@@ -2,14 +2,14 @@ import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
-import type { ActiveModelCategory, Classification, Phase, Recommendation, RouteOnceStatus } from "./types.ts";
+import type { ActiveModelCategory, Classification, Phase, Recommendation, RouteOnceStatus, AggregateUsage } from "./types.ts";
 import { CANONICAL_PROFILES } from "./types.ts";
 
-const PHASES = new Set<Phase>(["explore", "implement", "plan", "review", "research", "vision", "unknown"]);
+const PHASES = new Set<Phase>(["clarify", "explore", "research", "plan", "plan-review", "implement", "review", "regression", "release", "vision", "unknown"]);
 const REASON_CODES = new Set([
   "input.image", "input.ambiguous", "input.empty",
   "risk.protected",
-  "phase.explore", "phase.implement", "phase.plan", "phase.review", "phase.research", "phase.vision",
+  "phase.explore", "phase.implement", "phase.plan", "phase.review", "phase.research", "phase.vision", "phase.clarify", "phase.plan-review", "phase.regression", "phase.release",
   "observed.explore", "observed.implement", "observed.review", "observed.research", "observed.vision",
   "provider.unavailable",
   "policy.low-confidence", "policy.no-eligible-profile", "policy.preferred", "policy.capability-fallback",
@@ -20,13 +20,7 @@ const ROUTE_ONCE_STATUSES = new Set<RouteOnceStatus>([
   "shadow", "armed", "applied", "skipped", "restored", "restore-failed", "user-overrode",
 ]);
 
-export interface AggregateUsage {
-  inputTokens?: number;
-  outputTokens?: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  cost?: number;
-}
+export type { AggregateUsage };
 
 export interface TelemetryRecord {
   schemaVersion: 1;

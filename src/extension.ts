@@ -1,10 +1,28 @@
 import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { defaultConfigPath, loadConfig, telemetryPath, type ConfigResult } from "./config.ts";
+import {
+  defaultConfigPath,
+  loadConfig,
+  saveConfig,
+  telemetryPath,
+  defaultSetupStatePath,
+  effectiveProfileTarget,
+  type ConfigResult,
+} from "./config.ts";
 import { classify, observeToolPhase } from "./classifier.ts";
 import { recommend } from "./policy.ts";
 import { discoverModels, type DiscoveredModel, type DiscoveryResult } from "./router.ts";
-import { footerText, formatConfig, formatExplain, formatHistory, formatStatus, type FusionView } from "./presentation.ts";
+import {
+  footerText,
+  formatConfig,
+  formatExplain,
+  formatHistory,
+  formatProposals,
+  formatSetup,
+  formatStatus,
+  formatWorkflow,
+  type FusionView,
+} from "./presentation.ts";
 import {
   createTelemetryRecord,
   mergeUsage,
@@ -12,6 +30,29 @@ import {
   TelemetryStore,
   type AggregateUsage,
 } from "./telemetry.ts";
+import { diagnoseSetup, isActiveReady, loadSetupState, probeAll, saveSetupState, type SetupDiagnostic } from "./setup.ts";
+import {
+  activeWorkflowForRepo,
+  approveWorkflow,
+  cancelWorkflow,
+  createWorkflowState,
+  foreignOwnerForRepo,
+  pauseWorkflow,
+  resumeWorkflow,
+  upsertWorkflow,
+  type WorkflowState,
+} from "./workflow.ts";
+import {
+  applyProposal,
+  buildTuningProposal,
+  loadOutcomes,
+  loadProposals,
+  recordOutcome,
+  rollbackProposal,
+  saveProposal,
+  setProposalStatus,
+  type TuningProposal,
+} from "./tuning.ts";
 import type {
   ActiveModelCategory,
   CanonicalProfile,
@@ -20,7 +61,9 @@ import type {
   Recommendation,
   RouteOnceReason,
   RouteOnceStatus,
+  SetupState,
 } from "./types.ts";
+import { CANONICAL_PROFILES } from "./types.ts";
 
 export interface FusionExtensionOptions {
   configPath?: string;
@@ -49,6 +92,11 @@ interface RuntimeState {
   startedAt: number | null;
   usage: AggregateUsage;
   outcome: "success" | "error" | "unknown";
+  setup: SetupState | null;
+  workflow: WorkflowState | null;
+  foreignOwner: boolean;
+  proposals: TuningProposal[];
+  mode: string;
 }
 
 type ActivePiModel = NonNullable<ExtensionContext["model"]>;
@@ -90,7 +138,7 @@ function providerModels(config: FusionConfig, discovery: DiscoveryResult): Disco
 }
 
 function registerProvider(pi: ExtensionAPI, config: FusionConfig, discovery: DiscoveryResult): void {
-  if (!config.enabled) return;
+  if (config.mode === "off") return;
   const models = providerModels(config, discovery).map((model) => {
     const profile = profileForModel(config, model.id, discovery);
     const capabilities = profile
@@ -115,14 +163,11 @@ function registerProvider(pi: ExtensionAPI, config: FusionConfig, discovery: Dis
     api: "openai-completions",
     ...(keylessLoopback
       ? {
-          streamSimple: (model, context, options) => streamOpenAICompletions(
-            model as Parameters<typeof streamOpenAICompletions>[0],
-            context,
-            {
+          streamSimple: (model: Parameters<typeof streamOpenAICompletions>[0], context: unknown, options?: { headers?: Record<string, string | null> }) =>
+            streamOpenAICompletions(model, context as Parameters<typeof streamOpenAICompletions>[1], {
               ...options,
               headers: { ...options?.headers, Authorization: null },
-            },
-          ),
+            }),
         }
       : {}),
     models,
@@ -136,6 +181,11 @@ function asView(state: RuntimeState): FusionView {
     classification: state.classification,
     recommendation: state.recommendation,
     activeModel: state.activeModel,
+    setup: state.setup,
+    workflow: state.workflow,
+    foreignOwner: state.foreignOwner,
+    proposals: state.proposals,
+    mode: state.mode,
     routeOnce: { status: state.routeOnceStatus, reason: state.routeOnceReason },
   };
 }
@@ -163,6 +213,9 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   const configResult = await loadConfig(configPath);
   let discovery: DiscoveryResult | null = null;
   let telemetry: TelemetryStore | null = null;
+  let setup: SetupState | null = null;
+  let workflow: WorkflowState | null = null;
+  let proposals: TuningProposal[] = [];
 
   if (configResult.status === "ready") {
     discovery = await discoverModels(configResult.config, { fetch: options.fetch, env: environment });
@@ -172,6 +225,12 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         telemetryPath(configPath, configResult.config),
         configResult.config.telemetry.maxEntries,
       );
+    }
+    setup = await loadSetupState(configPath, { fetch: options.fetch });
+    try {
+      proposals = await loadProposals(configPath);
+    } catch {
+      proposals = [];
     }
   }
 
@@ -188,6 +247,11 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     startedAt: null,
     usage: {},
     outcome: "unknown",
+    setup,
+    workflow,
+    foreignOwner: false,
+    proposals,
+    mode: configResult.status === "ready" ? configResult.config.mode : "invalid",
   };
   const clock = options.now ?? Date.now;
   const stderr = options.stderr ?? ((message: string) => process.stderr.write(message));
@@ -210,6 +274,8 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     previousLevel: ActiveThinkingLevel;
     level: ActiveThinkingLevel;
   }> = [];
+  /** When the user explicitly overrides the model, auto-routing pauses until they rearm. */
+  let userOverrideActive = false;
 
   const setActiveModel = (identity: ModelIdentity | null): void => {
     state.activeModel = displayModel(identity);
@@ -227,7 +293,18 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       resolvedModels: state.discovery.resolvedProfiles,
       effectiveCapabilities: state.discovery.effectiveCapabilities,
       providerReady: state.discovery.status === "ready",
+      overrideTargets: workflowTargets(),
     });
+  };
+
+  const workflowTargets = (): Partial<Record<CanonicalProfile, string>> | undefined => {
+    if (state.config.status !== "ready" || !workflow) return undefined;
+    const overrides: Partial<Record<CanonicalProfile, string>> = {};
+    for (const profile of CANONICAL_PROFILES) {
+      const target = effectiveProfileTarget(state.config.config, profile, workflow.repo);
+      if (target !== state.config.config.profiles[profile].modelId) overrides[profile] = target;
+    }
+    return Object.keys(overrides).length ? overrides : undefined;
   };
 
   const persist = async (): Promise<void> => {
@@ -276,8 +353,6 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       const transitionStart = activeInternalThinkingStart;
       const after = readThinkingLevel();
       if (transitionStart && after && transitionStart !== after && !activeInternalThinkingObserved) {
-        // Pi dispatches thinking_level_select without awaiting it. Retain the exact
-        // target-model transition so a late host event is not mistaken for user intent.
         pendingInternalThinkingTransitions.push({
           model: { provider: model.provider, id: model.id },
           previousLevel: transitionStart,
@@ -293,8 +368,6 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     expectedInternalThinkingLevel = level;
     try {
       pi.setThinkingLevel(level);
-      // Pi emits thinking_level_select asynchronously. Let its synchronous/microtask
-      // dispatch consume the guard before accepting a later user selection.
       await Promise.resolve();
       const observed = readThinkingLevel();
       return observed === null || observed === level;
@@ -361,15 +434,11 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         }
         modelReady = restored;
       } else if (previous) {
-        // The recommended model was already current; the run is still one active
-        // one-shot transaction, but settlement requires no model API call.
         state.routeOnceStatus = "restored";
         state.routeOnceReason = null;
         setActiveModel({ provider: previous.provider, id: previous.id });
         modelReady = true;
       } else if (state.routeOnceStatus === "user-overrode") {
-        // A user-selected model already won during the routed run. Preserve that
-        // model while still restoring the pre-route thinking preference below.
         modelReady = true;
       }
 
@@ -407,12 +476,50 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   const finishOneShot = async (ctx: ExtensionContext): Promise<void> => {
     await restoreOneShot(ctx);
     if (deferTelemetryUntilSettled) {
-      // Clear before awaiting so concurrent settlement/shutdown events cannot
-      // append a duplicate record for the same one-shot run.
       deferTelemetryUntilSettled = false;
       await persist();
     }
     updateFooter(state, ctx);
+  };
+
+  /** Full-product: create a managed workflow for a coding question (or none for read-only). */
+  const ensureWorkflow = async (ctx: ExtensionContext): Promise<void> => {
+    if (state.config.status !== "ready" || !state.classification) return;
+    if (state.classification.mutationIntent !== "mutation") {
+      workflow = null;
+      state.workflow = null;
+      return;
+    }
+    if (workflow && (workflow.status === "running" || workflow.status === "awaiting-approval" || workflow.status === "paused")) return;
+    const repo = ctx.cwd;
+    const foreign = await foreignOwnerForRepo(repo, getSessionId(ctx));
+    state.foreignOwner = foreign !== null;
+    const existing = await activeWorkflowForRepo(repo, getSessionId(ctx));
+    if (existing) {
+      workflow = existing;
+      state.workflow = existing;
+      return;
+    }
+    workflow = createWorkflowState({
+      repo,
+      adapter: "session",
+      flickerTicketId: null,
+      classification: state.classification,
+      mode: state.config.config.mode,
+      ownerSession: getSessionId(ctx),
+      ownerPid: process.pid,
+    });
+    state.workflow = workflow;
+    await upsertWorkflow(workflow);
+  };
+
+  const getSessionId = (ctx: ExtensionContext): string => {
+    try {
+      const session = ctx.sessionManager as { getSessionId?: () => string };
+      return session.getSessionId?.() ?? "unknown-session";
+    } catch {
+      return "unknown-session";
+    }
   };
 
   pi.on("session_start", (_event, ctx) => {
@@ -421,8 +528,6 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    // Normal reload/shutdown is an awaited best-effort rollback boundary.
-    // An uncatchable process death (for example SIGKILL) cannot run this hook.
     await finishOneShot(ctx);
     if (ctx.mode === "tui") ctx.ui.setStatus("pi-fusion", undefined);
   });
@@ -435,7 +540,35 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     state.outcome = "unknown";
     reroute();
 
-    if (!state.routeOnceArmed) {
+    const config = state.config;
+    const activeMode = config.status === "ready" && config.config.mode === "active";
+    const ready = activeMode && setup !== null && isActiveReady(config.config, setup);
+
+    if (activeMode && !ready) {
+      updateFooter(state, ctx);
+      return;
+    }
+
+    // Full-product workflow lifecycle only applies in active mode; shadow and
+    // one-shot keep the observed routing path and never create workflow state.
+    if (activeMode) {
+      await ensureWorkflow(ctx);
+      if (state.workflow && state.workflow.status === "awaiting-approval") {
+        state.workflow = await persistWorkflowState();
+        updateFooter(state, ctx);
+        return;
+      }
+    } else {
+      state.workflow = null;
+      state.foreignOwner = false;
+    }
+
+    // Auto-routing in active mode: route mutation work once the plan is approved,
+    // and read-only work directly, unless the user explicitly overrode the model.
+    const shouldAutoRoute = activeMode && !userOverrideActive && state.recommendation?.profile && state.recommendation.modelId;
+    const armed = state.routeOnceArmed || shouldAutoRoute;
+
+    if (!armed) {
       if (!routeOnceActive && !deferTelemetryUntilSettled) {
         state.routeOnceStatus = "shadow";
         state.routeOnceReason = null;
@@ -536,7 +669,6 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     state.usage = mergeUsage(state.usage, sanitizeUsage(event.usage));
     if (event.isError) state.outcome = "error";
     updateFooter(state, ctx);
-    // Deliberately return nothing: tool output is neither read nor modified.
   });
 
   pi.on("after_provider_response", (event) => {
@@ -560,20 +692,15 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     if (internal) {
       expectedInternalSelection = null;
     } else if (restorationInProgress) {
-      // Keep the restoration transaction active. If the internal restore lands
-      // after this user choice, restoreOneShot reapplies the latest user model.
       userSelectionDuringRestore = event.model;
       state.routeOnceStatus = "user-overrode";
       state.routeOnceReason = "user-selected-model";
     } else if (routeOnceActive) {
-      // A user choice during the routed run cancels stale restoration, but the
-      // one-shot remains active until settlement so another arm cannot stack.
       restoreModel = null;
-      // The user's model wins, but model selection is distinct from an explicit
-      // thinking-level choice. Preserve the pre-route preference for settlement.
       routeChangedModel = false;
       state.routeOnceStatus = "user-overrode";
       state.routeOnceReason = "user-selected-model";
+      userOverrideActive = true;
     }
     setActiveModel(selected);
     updateFooter(state, ctx);
@@ -603,9 +730,6 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     } else if (pendingIndex >= 0) {
       pendingInternalThinkingTransitions.splice(pendingIndex, 1);
     } else if (routeSelectionInProgress || routeOnceActive || restorationInProgress) {
-      // Only a transition correlated to the exact internal target is a clamp.
-      // Anything else is explicit user intent, including auth-wait changes made
-      // before Pi has selected the target model.
       userThinkingLevel = event.level;
       if (routeSelectionInProgress && !expectedTargetIsCurrent) {
         activeInternalThinkingStart = event.level;
@@ -617,10 +741,18 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     await finishOneShot(ctx);
   });
 
-  const report = (ctx: ExtensionContext, message: string): void => show(ctx, message, healthLevel(state), stderr);
+  const persistWorkflowState = async (): Promise<WorkflowState | null> => {
+    if (!workflow) return null;
+    await upsertWorkflow(workflow);
+    return workflow;
+  };
+
+  const report = (ctx: ExtensionContext, message: string, level: "info" | "warning" = healthLevel(state)): void => show(ctx, message, level, stderr);
+
   pi.registerCommand("fusion-route-once", {
     description: "Route exactly the next task through an eligible Pi Fusion recommendation",
     handler: async (_args, ctx) => {
+      userOverrideActive = false;
       if (state.routeOnceArmed || routeOnceActive || deferTelemetryUntilSettled) {
         report(ctx, `fusion: one-shot ${state.routeOnceArmed ? "already armed" : "already active"} · no additional route queued`);
         return;
@@ -633,16 +765,204 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       report(ctx, "fusion: one-shot armed · exactly the next task will route if eligible");
     },
   });
+  pi.registerCommand("fusion-mode", {
+    description: "Show or set the Fusion mode (off, shadow, active)",
+    handler: async (args, ctx) => {
+      if (state.config.status !== "ready") {
+        report(ctx, "fusion mode: unconfigured · run /fusion-setup");
+        return;
+      }
+      const requested = args?.[0] as string | undefined;
+      if (!requested) {
+        report(ctx, `fusion mode: ${state.config.config.mode}`);
+        return;
+      }
+      if (!["off", "shadow", "active"].includes(requested)) {
+        report(ctx, "fusion mode: must be off, shadow, or active", "warning");
+        return;
+      }
+      if (requested === "active" && !isActiveReady(state.config.config, setup ?? { version: 1, complete: false, lastProbedAt: null, probes: {} })) {
+        report(ctx, "fusion mode: active blocked · setup incomplete · run /fusion-setup", "warning");
+        return;
+      }
+      const updated = { ...state.config.config, mode: requested as FusionConfig["mode"] };
+      await saveConfig(state.config.path, updated);
+      state.config = { status: "ready", path: state.config.path, config: updated, diagnostics: [] };
+      state.mode = requested;
+      report(ctx, `fusion mode: ${requested}`);
+    },
+  });
+  pi.registerCommand("fusion-setup", {
+    description: "Probe all seven profiles and gate active readiness",
+    handler: async (_args, ctx) => {
+      if (state.config.status !== "ready" || !state.discovery) {
+        report(ctx, "fusion setup: unavailable · no ready configuration/discovery", "warning");
+        return;
+      }
+      const config = state.config.config;
+      const diagnostics: SetupDiagnostic[] = diagnoseSetup(config, state.discovery.models);
+      const blocked = diagnostics.filter((item) => !item.ok);
+      if (blocked.length > 0) {
+        const lines = blocked.map((item) => `  ${item.profile}: ${item.issues.join(", ")}`);
+        report(ctx, `fusion setup: mapping blocked\n${lines.join("\n")}`, "warning");
+        return;
+      }
+      const { probes, complete, failures } = await probeAll(config, { fetch: options.fetch, env: environment });
+      const nextSetup: SetupState = {
+        version: 1,
+        complete,
+        lastProbedAt: new Date().toISOString(),
+        probes,
+      };
+      await saveSetupState(configPath, nextSetup);
+      setup = nextSetup;
+      state.setup = nextSetup;
+      if (complete) {
+        report(ctx, `fusion setup: complete · all seven profiles probed · mode ${config.mode}${isActiveReady(config, nextSetup) ? " · active ready" : ""}`);
+      } else {
+        const lines = failures.map((profile) => `  ${profile}: ${probes[profile]?.error ?? "failed"}`);
+        report(ctx, `fusion setup: incomplete · ${failures.length} failing\n${lines.join("\n")}`, "warning");
+      }
+    },
+  });
+  pi.registerCommand("fusion-plan", {
+    description: "Approve the current workflow plan (enables mutation execution)",
+    handler: async (_args, ctx) => {
+      if (!workflow || workflow.status !== "awaiting-approval") {
+        report(ctx, "fusion plan: no workflow awaiting approval", "warning");
+        return;
+      }
+      const config = state.config.status === "ready" ? state.config.config : null;
+      workflow = approveWorkflow(workflow, {
+        scope: workflow.nodes.map((node) => node.kind).join(" -> "),
+        acceptance: ["contract-defined"],
+        worktree: workflow.repo,
+        writer: `writer-${workflow.id.slice(0, 8)}`,
+        authority: ["local-commit"],
+        profile: state.recommendation?.profile ?? null,
+        maxFanout: config?.tuning.maxFanout ?? 4,
+        maxDepth: config?.tuning.maxDepth ?? 2,
+        maxRetries: config?.tuning.maxRetries ?? 3,
+        maxSwitches: config?.tuning.maxSwitches ?? 4,
+        budgetTokens: null,
+      });
+      state.workflow = workflow;
+      await persistWorkflowState();
+      userOverrideActive = false;
+      report(ctx, `fusion plan: approved · envelope v${workflow.envelope?.version} · running`);
+    },
+  });
+  pi.registerCommand("fusion-workflow", {
+    description: "Show the active managed workflow graph",
+    handler: async (_args, ctx) => report(ctx, formatWorkflow(state.workflow)),
+  });
+  pi.registerCommand("fusion-pause", {
+    description: "Pause the active workflow",
+    handler: async (_args, ctx) => {
+      if (!workflow) { report(ctx, "fusion pause: no active workflow", "warning"); return; }
+      workflow = pauseWorkflow(workflow);
+      state.workflow = workflow;
+      await persistWorkflowState();
+      report(ctx, "fusion pause: workflow paused");
+    },
+  });
+  pi.registerCommand("fusion-resume", {
+    description: "Resume a paused workflow",
+    handler: async (_args, ctx) => {
+      if (!workflow) { report(ctx, "fusion resume: no active workflow", "warning"); return; }
+      workflow = resumeWorkflow(workflow);
+      state.workflow = workflow;
+      await persistWorkflowState();
+      report(ctx, "fusion resume: workflow resumed");
+    },
+  });
+  pi.registerCommand("fusion-cancel", {
+    description: "Cancel the active workflow",
+    handler: async (_args, ctx) => {
+      if (!workflow) { report(ctx, "fusion cancel: no active workflow", "warning"); return; }
+      workflow = cancelWorkflow(workflow);
+      state.workflow = workflow;
+      await persistWorkflowState();
+      report(ctx, "fusion cancel: workflow cancelled");
+    },
+  });
+  pi.registerCommand("fusion-tune-propose", {
+    description: "Build a permission-gated tuning proposal from outcomes",
+    handler: async (_args, ctx) => {
+      if (state.config.status !== "ready") { report(ctx, "fusion tune: unconfigured", "warning"); return; }
+      const outcomes = await loadOutcomes(state.config.config, configPath);
+      const proposal = buildTuningProposal({
+        config: state.config.config,
+        outcomes,
+        description: "Automatic proposal from measured outcomes",
+        kind: "circuit-breaker",
+        diff: { note: "proposal-only; no policy change without approval" },
+        expectedImpact: "See evidence sample before approving",
+        scope: "global",
+      });
+      if (!proposal) {
+        report(ctx, `fusion tune: insufficient evidence (${outcomes.length} < ${state.config.config.tuning.minEvidence})`, "warning");
+        return;
+      }
+      await saveProposal(proposal, configPath);
+      state.proposals = await loadProposals(configPath);
+      report(ctx, `fusion tune: proposal ${proposal.id.slice(0, 8)} created · approve with /fusion-tune-approve ${proposal.id.slice(0, 8)}`);
+    },
+  });
+  pi.registerCommand("fusion-tune-approve", {
+    description: "Approve a tuning proposal (applies to future workflows only)",
+    handler: async (args, ctx) => {
+      const id = args?.[0] as string | undefined;
+      const proposals = await loadProposals(configPath);
+      const proposal = proposals.find((item) => item.id.startsWith(id ?? "") && item.status === "proposed");
+      if (!proposal) { report(ctx, "fusion tune: no proposed proposal matches", "warning"); return; }
+      const applied = await applyProposal(proposal, configPath);
+      state.proposals = await loadProposals(configPath);
+      report(ctx, `fusion tune: approved · applied to future workflows · rollback /fusion-tune-rollback ${applied.id.slice(0, 8)}`);
+    },
+  });
+  pi.registerCommand("fusion-tune-deny", {
+    description: "Deny a tuning proposal",
+    handler: async (args, ctx) => {
+      const id = args?.[0] as string | undefined;
+      const proposals = await loadProposals(configPath);
+      const proposal = proposals.find((item) => item.id.startsWith(id ?? "") && item.status === "proposed");
+      if (!proposal) { report(ctx, "fusion tune: no proposed proposal matches", "warning"); return; }
+      await setProposalStatus({ ...proposal, status: "denied" as const }, "denied", configPath);
+      state.proposals = await loadProposals(configPath);
+      report(ctx, "fusion tune: denied");
+    },
+  });
+  pi.registerCommand("fusion-tune-rollback", {
+    description: "Roll back an applied tuning proposal",
+    handler: async (args, ctx) => {
+      const id = args?.[0] as string | undefined;
+      const proposals = await loadProposals(configPath);
+      const proposal = proposals.find((item) => item.id.startsWith(id ?? "") && item.status === "applied");
+      if (!proposal) { report(ctx, "fusion tune: no applied proposal matches", "warning"); return; }
+      const rolled = await rollbackProposal(proposal, configPath);
+      state.proposals = await loadProposals(configPath);
+      report(ctx, `fusion tune: rolled back · ${rolled.id.slice(0, 8)}`);
+    },
+  });
+  pi.registerCommand("fusion-proposals", {
+    description: "List tuning proposals",
+    handler: async (_args, ctx) => report(ctx, formatProposals(state.proposals)),
+  });
+  pi.registerCommand("fusion-setup-status", {
+    description: "Show setup readiness and probe results",
+    handler: async (_args, ctx) => report(ctx, formatSetup(asView(state))),
+  });
   pi.registerCommand("fusion-status", {
-    description: "Show Pi Fusion shadow and one-shot routing health",
+    description: "Show Pi Fusion mode, setup, workflow, and routing health",
     handler: async (_args, ctx) => report(ctx, formatStatus(asView(state))),
   });
   pi.registerCommand("fusion-explain", {
-    description: "Explain the current recommendation and one-shot route state",
+    description: "Explain the current recommendation and route state",
     handler: async (_args, ctx) => report(ctx, formatExplain(asView(state))),
   });
   pi.registerCommand("fusion-history", {
-    description: "Show recent content-free shadow and one-shot routing decisions",
+    description: "Show recent content-free routing and workflow decisions",
     handler: async (_args, ctx) => {
       try {
         const records = telemetry ? await telemetry.recent(20) : [];

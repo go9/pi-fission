@@ -8,22 +8,27 @@ import {
 } from "./types.ts";
 
 const PHASE_PREFERENCE: Record<Classification["phase"], CanonicalProfile> = {
-  explore: "pi-fast",
-  implement: "pi-code",
-  plan: "pi-reason",
-  review: "pi-review",
-  research: "pi-research",
-  vision: "pi-vision",
-  unknown: "pi-fast",
+  clarify: "fast",
+  explore: "fast",
+  research: "research",
+  plan: "reason",
+  "plan-review": "review",
+  implement: "code",
+  review: "review",
+  regression: "review",
+  release: "reason",
+  vision: "vision",
+  unknown: "fast",
 };
 
 const FALLBACK_ORDER: CanonicalProfile[] = [
-  "pi-fast",
-  "pi-code",
-  "pi-reason",
-  "pi-review",
-  "pi-research",
-  "pi-vision",
+  "fast",
+  "code",
+  "reason",
+  "review",
+  "research",
+  "vision",
+  "design",
 ];
 
 export function capabilityGaps(required: Capabilities, available: Capabilities): string[] {
@@ -42,12 +47,14 @@ export interface PolicyInput {
   resolvedModels: Partial<Record<CanonicalProfile, string>>;
   effectiveCapabilities?: Partial<Record<CanonicalProfile, Capabilities>>;
   providerReady: boolean;
+  /** Effective profile targets after project overrides (maps profile -> model id). */
+  overrideTargets?: Partial<Record<CanonicalProfile, string>>;
 }
 
 export function recommend(input: PolicyInput): Recommendation {
   const { classification, config, resolvedModels, effectiveCapabilities, providerReady } = input;
   const evaluations = CANONICAL_PROFILES.map((profile) => {
-    const modelId = resolvedModels[profile] ?? config.profiles[profile].modelId;
+    const modelId = input.overrideTargets?.[profile] ?? resolvedModels[profile] ?? config.profiles[profile].modelId;
     const available = effectiveCapabilities?.[profile] ?? config.profiles[profile].capabilities;
     const gaps = capabilityGaps(classification.requiredCapabilities, available);
     if (!resolvedModels[profile]) gaps.unshift("model.unavailable");
@@ -56,11 +63,9 @@ export function recommend(input: PolicyInput): Recommendation {
 
   if (!providerReady) {
     return {
-      shadow: true,
       profile: null,
       modelId: null,
       confidence: 0,
-      retainCurrentModel: true,
       reasonCodes: ["provider.unavailable"],
       evaluations,
     };
@@ -68,17 +73,15 @@ export function recommend(input: PolicyInput): Recommendation {
 
   if (classification.confidence < 0.5 || classification.phase === "unknown") {
     return {
-      shadow: true,
       profile: null,
       modelId: null,
       confidence: classification.confidence,
-      retainCurrentModel: true,
       reasonCodes: [...classification.reasonCodes, "policy.low-confidence"],
       evaluations,
     };
   }
 
-  const preferred = classification.risk === "protected" ? "pi-reason" : PHASE_PREFERENCE[classification.phase];
+  const preferred = classification.risk === "protected" ? "reason" : PHASE_PREFERENCE[classification.phase];
   const order = [preferred, ...FALLBACK_ORDER.filter((profile) => profile !== preferred)];
   const selected = order
     .map((profile) => evaluations.find((item) => item.profile === profile))
@@ -86,22 +89,18 @@ export function recommend(input: PolicyInput): Recommendation {
 
   if (!selected) {
     return {
-      shadow: true,
       profile: null,
       modelId: null,
       confidence: classification.confidence,
-      retainCurrentModel: true,
       reasonCodes: [...classification.reasonCodes, "policy.no-eligible-profile"],
       evaluations,
     };
   }
 
   return {
-    shadow: true,
     profile: selected.profile,
     modelId: selected.modelId,
     confidence: classification.confidence,
-    retainCurrentModel: true,
     reasonCodes: [
       ...classification.reasonCodes,
       selected.profile === preferred ? "policy.preferred" : "policy.capability-fallback",

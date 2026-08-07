@@ -24,7 +24,7 @@ describe("Pi host loader", () => {
     const configPath = join(directory, "pi-fusion.json");
     const base = validConfig();
     await writeFile(configPath, JSON.stringify(validConfig({
-      enabled: false,
+      mode: "off",
       provider: { ...base.provider, baseUrl: "http://127.0.0.1:1/v1", apiKey: undefined },
       telemetry: { ...base.telemetry, enabled: false },
     })), "utf8");
@@ -99,7 +99,7 @@ describe("Pi host loader", () => {
               }
               send({ id: "diagnostic", type: "prompt", message: "/fusion-config" });
             } else if (message.type === "extension_ui_request" && message.method === "notify") {
-              if (message.message?.includes("fusion config: shadow")) sawDiagnostic = true;
+              if (message.message?.includes("fusion config: off")) sawDiagnostic = true;
             } else if (message.type === "response" && message.id === "diagnostic") {
               if (!message.success) {
                 finish(new Error(`fusion-config failed: ${message.error ?? "unknown error"}`));

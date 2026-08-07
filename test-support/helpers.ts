@@ -3,22 +3,26 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { FusionConfig } from "../src/types.ts";
+import { DEFAULT_PROFILE_CAPABILITIES } from "../src/config.ts";
 
 export function validConfig(overrides: Partial<FusionConfig> = {}): FusionConfig {
   const config: FusionConfig = {
-    version: 1,
-    enabled: true,
+    version: 2,
+    mode: "shadow",
     provider: { id: "9router", baseUrl: "http://127.0.0.1:1/v1", apiKey: "$TEST_9ROUTER_KEY", timeoutMs: 200 },
     profiles: {
-      "pi-fast": { modelId: "pi-fast", capabilities: { tools: true, reasoning: false, image: false, structuredOutput: false, contextWindow: 64_000 } },
-      "pi-code": { modelId: "pi-code", capabilities: { tools: true, reasoning: true, image: false, structuredOutput: true, contextWindow: 128_000 } },
-      "pi-reason": { modelId: "pi-reason", capabilities: { tools: true, reasoning: true, image: false, structuredOutput: true, contextWindow: 200_000 } },
-      "pi-review": { modelId: "pi-review", capabilities: { tools: true, reasoning: true, image: false, structuredOutput: true, contextWindow: 200_000 } },
-      "pi-research": { modelId: "pi-research", capabilities: { tools: true, reasoning: true, image: false, structuredOutput: false, contextWindow: 200_000 } },
-      "pi-vision": { modelId: "pi-vision", capabilities: { tools: true, reasoning: true, image: true, structuredOutput: false, contextWindow: 128_000 } },
+      fast: { modelId: "fusion-explore", capabilities: DEFAULT_PROFILE_CAPABILITIES.fast },
+      code: { modelId: "fusion-sidekick", capabilities: DEFAULT_PROFILE_CAPABILITIES.code },
+      reason: { modelId: "fusion-plan", capabilities: DEFAULT_PROFILE_CAPABILITIES.reason },
+      review: { modelId: "fusion-reviewer", capabilities: DEFAULT_PROFILE_CAPABILITIES.review },
+      research: { modelId: "fusion-research", capabilities: DEFAULT_PROFILE_CAPABILITIES.research },
+      vision: { modelId: "fusion-vision", capabilities: DEFAULT_PROFILE_CAPABILITIES.vision },
+      design: { modelId: "fusion-design", capabilities: DEFAULT_PROFILE_CAPABILITIES.design },
     },
-    aliases: { plan: "pi-reason", sidekick: "pi-code", explore: "pi-fast", "small-model": "pi-fast" },
+    aliases: { plan: "reason", sidekick: "code", explore: "fast", "small-model": "fast", reviewer: "review", research: "research", vision: "vision", design: "design" },
+    projectOverrides: [],
     telemetry: { enabled: true, file: "telemetry.jsonl", maxEntries: 20 },
+    tuning: { enabled: true, file: "tuning.jsonl", maxEntries: 200, minEvidence: 5, maxFanout: 4, maxDepth: 2, maxRetries: 3, maxSwitches: 4 },
   };
   return {
     ...config,
@@ -26,7 +30,9 @@ export function validConfig(overrides: Partial<FusionConfig> = {}): FusionConfig
     provider: { ...config.provider, ...overrides.provider },
     profiles: overrides.profiles ?? config.profiles,
     aliases: overrides.aliases ?? config.aliases,
+    projectOverrides: overrides.projectOverrides ?? config.projectOverrides,
     telemetry: { ...config.telemetry, ...overrides.telemetry },
+    tuning: { ...config.tuning, ...overrides.tuning },
   };
 }
 

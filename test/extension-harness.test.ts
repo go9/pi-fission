@@ -123,9 +123,9 @@ describe("Pi observer extension shadow mode", () => {
     const mock = await listen((_request, response) => {
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ data: [
-        { id: "pi-fast" },
-        { id: "pi-code", context_window: 32_000, input: ["text"], supports_structured_output: false },
-        { id: "pi-reason" }, { id: "pi-review" }, { id: "pi-research" }, { id: "pi-vision" },
+        { id: "fusion-explore" },
+        { id: "fusion-sidekick", context_window: 32_000, input: ["text"], supports_structured_output: false },
+        { id: "fusion-plan" }, { id: "fusion-reviewer" }, { id: "fusion-research" }, { id: "fusion-vision" }, { id: "fusion-design" },
       ] }));
     });
     const config = validConfig({ provider: { ...validConfig().provider, baseUrl: mock.baseUrl } });
@@ -144,10 +144,16 @@ describe("Pi observer extension shadow mode", () => {
       });
       assert.equal(runtime.providers.length, 1, "provider registered during async initialization");
       assert.equal(runtime.providers[0]?.name, "9router");
-      const registeredCode = runtime.providers[0]?.provider.models.find((model: any) => model.id === "pi-code");
+      const registeredCode = runtime.providers[0]?.provider.models.find((model: any) => model.id === "fusion-sidekick");
       assert.equal(registeredCode.contextWindow, 32_000, "known discovered context constrains registration");
       assert.equal(registeredCode.reasoning, true, "unknown discovered reasoning retains explicit configured floor");
-      assert.deepEqual([...runtime.commands.keys()].sort(), ["fusion-config", "fusion-explain", "fusion-history", "fusion-route-once", "fusion-status"]);
+      const expectedCommands = [
+        "fusion-cancel", "fusion-config", "fusion-explain", "fusion-history", "fusion-mode",
+        "fusion-pause", "fusion-plan", "fusion-proposals", "fusion-resume", "fusion-route-once",
+        "fusion-setup", "fusion-setup-status", "fusion-status", "fusion-tune-approve",
+        "fusion-tune-deny", "fusion-tune-propose", "fusion-tune-rollback", "fusion-workflow",
+      ].sort();
+      assert.deepEqual([...runtime.commands.keys()].sort(), expectedCommands);
       for (const event of ["agent_settled", "before_agent_start", "tool_result", "turn_end", "model_select", "thinking_level_select", "after_provider_response", "session_start", "session_shutdown"]) {
         assert.ok(runtime.handlers.has(event), `registered ${event}`);
       }
@@ -194,7 +200,7 @@ describe("Pi observer extension shadow mode", () => {
       for (const sentinel of ["PROMPT_SENTINEL", "SYSTEM_SENTINEL", "SOURCE_SENTINEL", "TOOL_OUTPUT_SENTINEL", "CREDENTIAL_SENTINEL", "tenant-a/private-deployment"]) {
         assert.doesNotMatch(telemetry, new RegExp(sentinel));
       }
-      assert.match(telemetry, /"recommendedProfile":"pi-reason"/, "pi-code is ineligible under discovered lower capability floor");
+      assert.match(telemetry, /"recommendedProfile":"reason"/, "fusion-sidekick is ineligible under discovered lower capability floor");
       assert.match(telemetry, /"activeModelCategory":"external"/);
     } finally {
       await mock.close();
@@ -214,12 +220,12 @@ describe("Pi observer extension shadow mode", () => {
       provider: { ...base.provider, baseUrl: mock.baseUrl },
       profiles: {
         ...base.profiles,
-        "pi-fast": { ...base.profiles["pi-fast"], modelId: "fusion-explore" },
-        "pi-code": { ...base.profiles["pi-code"], modelId: "fusion-sidekick" },
-        "pi-reason": { ...base.profiles["pi-reason"], modelId: "fusion-plan" },
-        "pi-review": { ...base.profiles["pi-review"], modelId: "fusion-reviewer" },
-        "pi-research": { ...base.profiles["pi-research"], modelId: "fusion-research" },
-        "pi-vision": { ...base.profiles["pi-vision"], modelId: "fusion-vision" },
+        "fast": { ...base.profiles["fast"], modelId: "fusion-explore" },
+        "code": { ...base.profiles["code"], modelId: "fusion-sidekick" },
+        "reason": { ...base.profiles["reason"], modelId: "fusion-plan" },
+        "review": { ...base.profiles["review"], modelId: "fusion-reviewer" },
+        "research": { ...base.profiles["research"], modelId: "fusion-research" },
+        "vision": { ...base.profiles["vision"], modelId: "fusion-vision" },
       },
     });
     const { path: configPath } = await writeConfig(config);
@@ -233,7 +239,7 @@ describe("Pi observer extension shadow mode", () => {
       });
       const context = fakeContext(tmpdir(), [], "json");
       await runtime.commands.get("fusion-config")?.("", context);
-      assert.match(stderr.join(""), /unresolved pi-vision/);
+      assert.match(stderr.join(""), /unresolved vision/);
       assert.equal(runtime.providers[0]?.provider.models.some((model: any) => model.id === "fusion-vision"), false);
     } finally {
       await mock.close();
@@ -246,8 +252,8 @@ describe("Pi observer extension shadow mode", () => {
       if (request.url === "/v1/models") {
         response.setHeader("content-type", "application/json");
         response.end(JSON.stringify({ data: [
-          { id: "pi-fast" }, { id: "pi-code" }, { id: "pi-reason" },
-          { id: "pi-review" }, { id: "pi-research" }, { id: "pi-vision" },
+          { id: "fusion-explore" }, { id: "fusion-sidekick" }, { id: "fusion-plan" },
+          { id: "fusion-reviewer" }, { id: "fusion-research" }, { id: "fusion-vision" }, { id: "fusion-design" },
         ] }));
         return;
       }
@@ -260,14 +266,14 @@ describe("Pi observer extension shadow mode", () => {
           id: "chatcmpl-test",
           object: "chat.completion.chunk",
           created: 1,
-          model: "pi-fast",
+          model: "fusion-explore",
           choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }],
         })}\n\n`);
         response.write(`data: ${JSON.stringify({
           id: "chatcmpl-test",
           object: "chat.completion.chunk",
           created: 1,
-          model: "pi-fast",
+          model: "fusion-explore",
           choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
         })}\n\n`);
         response.end("data: [DONE]\n\n");
@@ -320,7 +326,7 @@ describe("Pi observer extension shadow mode", () => {
     });
     assert.equal(runtime.providers.length, 1);
     assert.equal(runtime.providers[0]?.name, "9router");
-    assert.equal(runtime.providers[0]?.provider.models.length, 6, "explicit profile IDs supply registration fallback");
+    assert.equal(runtime.providers[0]?.provider.models.length, 7, "explicit profile IDs supply registration fallback");
     const context = fakeContext(tmpdir(), [], "json");
     await runtime.commands.get("fusion-status")?.("", context);
     assert.match(stderr.join(""), /shadow · unavailable/);
@@ -343,8 +349,8 @@ async function readyOneShotRuntime(
   const mock = await listen((_request, response) => {
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify({ data: [
-      { id: "pi-fast" }, { id: "pi-code" }, { id: "pi-reason" },
-      { id: "pi-review" }, { id: "pi-research" }, { id: "pi-vision" },
+      { id: "fusion-explore" }, { id: "fusion-sidekick" }, { id: "fusion-plan" },
+      { id: "fusion-reviewer" }, { id: "fusion-research" }, { id: "fusion-vision" }, { id: "fusion-design" },
     ] }));
   });
   const config = validConfig({ provider: { ...validConfig().provider, baseUrl: mock.baseUrl } });
@@ -356,7 +362,7 @@ async function readyOneShotRuntime(
     configPath: written.path,
     env: { TEST_9ROUTER_KEY: "CREDENTIAL_SENTINEL" },
   });
-  const models = Object.keys(config.profiles).map((id) => ({ id, provider: "9router", name: id }));
+  const models = Object.values(config.profiles).map((profile) => ({ id: profile.modelId, provider: "9router", name: profile.modelId }));
   return { mock, config, written, runtime, models };
 }
 
@@ -376,7 +382,7 @@ describe("Pi Fusion one-shot active routing", () => {
         prompt: "Plan the architecture for a complex migration", images: [], systemPrompt: "SYSTEM_SENTINEL",
       });
       assert.equal(fixture.runtime.selectionCalls.length, 1, "selection completes inside before_agent_start");
-      assert.equal(fixture.runtime.selectionCalls[0]?.id, "pi-reason");
+      assert.equal(fixture.runtime.selectionCalls[0]?.id, "fusion-plan");
 
       const target = fixture.runtime.selectionCalls[0];
       await emit(fixture.runtime.handlers, context, "model_select", { model: target, previousModel: previous, source: "set" });
@@ -705,7 +711,7 @@ describe("Pi Fusion one-shot active routing", () => {
   it("keeps an already-current target active until settlement without duplicate telemetry", async () => {
     const fixture = await readyOneShotRuntime();
     const notifications: string[] = [];
-    const current = fixture.models.find((model) => model.id === "pi-reason");
+    const current = fixture.models.find((model) => model.id === "fusion-plan");
     assert.ok(current);
     const context = fakeContext(tmpdir(), notifications, "tui", current, fixture.models);
     try {

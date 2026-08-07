@@ -12,7 +12,7 @@ function chatCompletion(text: string, status = 200) {
     id: "chatcmpl-test",
     object: "chat.completion",
     created: 1,
-    model: "fusion-plan",
+    model: "fission-plan",
     choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
     usage: { prompt_tokens: 4, completion_tokens: 1, total_tokens: 5 },
   });
@@ -25,12 +25,12 @@ describe("full-product config", () => {
       enabled: true,
       provider: { id: "9router", baseUrl: "http://127.0.0.1:20128/v1", apiKey: "$NINE_ROUTER_API_KEY", timeoutMs: 2000 },
       profiles: {
-        "pi-fast": { modelId: "fusion-explore", capabilities: { tools: true, reasoning: false, image: false, structuredOutput: false, contextWindow: 64000 } },
-        "pi-code": { modelId: "fusion-sidekick", capabilities: { tools: true, reasoning: true, image: false, structuredOutput: true, contextWindow: 128000 } },
-        "pi-reason": { modelId: "fusion-plan", capabilities: { tools: true, reasoning: true, image: false, structuredOutput: true, contextWindow: 200000 } },
-        "pi-review": { modelId: "fusion-reviewer", capabilities: { tools: true, reasoning: true, image: false, structuredOutput: true, contextWindow: 200000 } },
-        "pi-research": { modelId: "fusion-research", capabilities: { tools: true, reasoning: true, image: false, structuredOutput: false, contextWindow: 200000 } },
-        "pi-vision": { modelId: "fusion-vision", capabilities: { tools: true, reasoning: true, image: true, structuredOutput: false, contextWindow: 128000 } },
+        "pi-fast": { modelId: "fission-explore", capabilities: { tools: true, reasoning: false, image: false, structuredOutput: false, contextWindow: 64000 } },
+        "pi-code": { modelId: "fission-sidekick", capabilities: { tools: true, reasoning: true, image: false, structuredOutput: true, contextWindow: 128000 } },
+        "pi-reason": { modelId: "fission-plan", capabilities: { tools: true, reasoning: true, image: false, structuredOutput: true, contextWindow: 200000 } },
+        "pi-review": { modelId: "fission-reviewer", capabilities: { tools: true, reasoning: true, image: false, structuredOutput: true, contextWindow: 200000 } },
+        "pi-research": { modelId: "fission-research", capabilities: { tools: true, reasoning: true, image: false, structuredOutput: false, contextWindow: 200000 } },
+        "pi-vision": { modelId: "fission-vision", capabilities: { tools: true, reasoning: true, image: true, structuredOutput: false, contextWindow: 128000 } },
       },
       aliases: { plan: "pi-reason", sidekick: "pi-code", explore: "pi-fast", "small-model": "pi-fast" },
       telemetry: { enabled: true, file: "telemetry.jsonl", maxEntries: 200 },
@@ -53,8 +53,8 @@ describe("full-product config", () => {
     });
     assert.equal(effectiveProfileTarget(config, "fast", "/repo-a"), "override-model-a");
     assert.equal(effectiveProfileTarget(config, "fast", "/repo-b"), "override-model-b");
-    assert.equal(effectiveProfileTarget(config, "fast", "/repo-c"), "fusion-explore", "unmatched repo uses the global target");
-    assert.equal(effectiveProfileTarget(config, "fast"), "fusion-explore", "no repo uses the global target");
+    assert.equal(effectiveProfileTarget(config, "fast", "/repo-c"), "fission-explore", "unmatched repo uses the global target");
+    assert.equal(effectiveProfileTarget(config, "fast"), "fission-explore", "no repo uses the global target");
   });
 
   it("rejects an active mode config with missing profiles", () => {
@@ -70,7 +70,7 @@ describe("full-product config", () => {
 describe("setup diagnostics and probes", () => {
   it("flags profile targets missing from the discovered catalogue", () => {
     const config = validConfig();
-    const diagnostics = diagnoseSetup(config, [{ id: "fusion-explore" }, { id: "fusion-sidekick" }]);
+    const diagnostics = diagnoseSetup(config, [{ id: "fission-explore" }, { id: "fission-sidekick" }]);
     const reason = diagnostics.find((item) => item.profile === "reason");
     assert.ok(reason);
     assert.equal(reason.ok, false);
@@ -84,7 +84,7 @@ describe("setup diagnostics and probes", () => {
       authorization = (init?.headers as Record<string, string> | undefined)?.Authorization;
       return new Response(chatCompletion("OK"), { status: 200, headers: { "content-type": "application/json" } });
     };
-    const result = await runProbe(config, "reason", "fusion-plan", { fetch: fetchImpl as unknown as typeof fetch, env: { TEST_9ROUTER_KEY: "secret" } });
+    const result = await runProbe(config, "reason", "fission-plan", { fetch: fetchImpl as unknown as typeof fetch, env: { TEST_9ROUTER_KEY: "secret" } });
     assert.equal(result.ok, true);
     assert.equal(result.keyless, false);
     assert.equal(authorization, "Bearer secret");
@@ -97,7 +97,7 @@ describe("setup diagnostics and probes", () => {
       authorization = (init?.headers as Record<string, string> | undefined)?.Authorization;
       return new Response(chatCompletion("I will help"), { status: 200, headers: { "content-type": "application/json" } });
     };
-    const result = await runProbe(config, "code", "fusion-sidekick", { fetch: fetchImpl as unknown as typeof fetch, env: {} });
+    const result = await runProbe(config, "code", "fission-sidekick", { fetch: fetchImpl as unknown as typeof fetch, env: {} });
     assert.equal(result.ok, false, "non-OK text fails the probe");
     assert.equal(result.keyless, true);
     assert.equal(authorization, undefined, "keyless loopback sends no Authorization");
@@ -118,7 +118,7 @@ describe("setup diagnostics and probes", () => {
     const okFetch = async (): Promise<Response> => new Response(chatCompletion("OK"), { status: 200, headers: { "content-type": "application/json" } });
     const failFetch = async (_url: unknown, init?: RequestInit): Promise<Response> => {
       const body = JSON.parse(String(init?.body));
-      return new Response(chatCompletion(body.model === "fusion-vision" ? "nope" : "OK"), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(chatCompletion(body.model === "fission-vision" ? "nope" : "OK"), { status: 200, headers: { "content-type": "application/json" } });
     };
     const { probes, complete, failures } = await probeAll(config, { fetch: failFetch as unknown as typeof fetch, env: { TEST_9ROUTER_KEY: "secret" } });
     assert.equal(complete, false);
@@ -136,21 +136,21 @@ describe("setup diagnostics and probes", () => {
     assert.equal(complete, true);
     assert.equal(isActiveReady({ ...config, mode: "active" }, { version: 1, complete, lastProbedAt: null, probes }), true);
     // Changing a profile target after a complete setup invalidates readiness until re-probed.
-    const staleTarget = { ...config, profiles: { ...config.profiles, fast: { ...config.profiles.fast, modelId: "fusion-new-target" } } };
+    const staleTarget = { ...config, profiles: { ...config.profiles, fast: { ...config.profiles.fast, modelId: "fission-new-target" } } };
     assert.equal(isActiveReady({ ...staleTarget, mode: "active" }, { version: 1, complete, lastProbedAt: null, probes }), false);
   });
 
   it("persists setup state and rejects an active mode without a complete setup file", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "pi-fusion-setup-"));
-    const configPath = join(dir, "pi-fusion.json");
+    const dir = await mkdtemp(join(tmpdir(), "pi-fission-setup-"));
+    const configPath = join(dir, "pi-fission.json");
     const setup = { version: 1 as const, complete: true, lastProbedAt: "2026-01-01T00:00:00.000Z", probes: {
-      fast: { profile: "fast" as const, modelId: "fusion-explore", ok: true, keyless: true, probedAt: "2026-01-01T00:00:00.000Z" },
-      code: { profile: "code" as const, modelId: "fusion-sidekick", ok: true, keyless: true, probedAt: "2026-01-01T00:00:00.000Z" },
-      reason: { profile: "reason" as const, modelId: "fusion-plan", ok: true, keyless: true, probedAt: "2026-01-01T00:00:00.000Z" },
-      review: { profile: "review" as const, modelId: "fusion-reviewer", ok: true, keyless: true, probedAt: "2026-01-01T00:00:00.000Z" },
-      research: { profile: "research" as const, modelId: "fusion-research", ok: true, keyless: true, probedAt: "2026-01-01T00:00:00.000Z" },
-      vision: { profile: "vision" as const, modelId: "fusion-vision", ok: true, keyless: true, probedAt: "2026-01-01T00:00:00.000Z" },
-      design: { profile: "design" as const, modelId: "fusion-design", ok: true, keyless: true, probedAt: "2026-01-01T00:00:00.000Z" },
+      fast: { profile: "fast" as const, modelId: "fission-explore", ok: true, keyless: true, probedAt: "2026-01-01T00:00:00.000Z" },
+      code: { profile: "code" as const, modelId: "fission-sidekick", ok: true, keyless: true, probedAt: "2026-01-01T00:00:00.000Z" },
+      reason: { profile: "reason" as const, modelId: "fission-plan", ok: true, keyless: true, probedAt: "2026-01-01T00:00:00.000Z" },
+      review: { profile: "review" as const, modelId: "fission-reviewer", ok: true, keyless: true, probedAt: "2026-01-01T00:00:00.000Z" },
+      research: { profile: "research" as const, modelId: "fission-research", ok: true, keyless: true, probedAt: "2026-01-01T00:00:00.000Z" },
+      vision: { profile: "vision" as const, modelId: "fission-vision", ok: true, keyless: true, probedAt: "2026-01-01T00:00:00.000Z" },
+      design: { profile: "design" as const, modelId: "fission-design", ok: true, keyless: true, probedAt: "2026-01-01T00:00:00.000Z" },
     } };
     await saveSetupState(configPath, setup);
     const loaded = await loadSetupState(configPath);

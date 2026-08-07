@@ -1,5 +1,5 @@
 {
-  "name": "pi-fusion",
+  "name": "pi-fission",
   "version": "0.2.0",
   "description": "Automatic semantic routing from Pi to seven configurable 9Router model groups",
   "type": "module",
@@ -23,7 +23,7 @@
   ],
   "pi": {
     "extensions": [
-      "./extensions/pi-fusion.ts"
+      "./extensions/pi-fission.ts"
     ]
   },
   "scripts": {

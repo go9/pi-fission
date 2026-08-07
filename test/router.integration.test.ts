@@ -89,8 +89,8 @@ describe("9Router discovery integration", () => {
     const mock = await listen((_request, response) => {
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ data: [
-        { id: "fusion-explore" }, { id: "fusion-plan" }, { id: "fusion-research" },
-        { id: "fusion-reviewer" }, { id: "fusion-sidekick" }, { id: "fusion-small" }, { id: "fusion-design" },
+        { id: "fission-explore" }, { id: "fission-plan" }, { id: "fission-research" },
+        { id: "fission-reviewer" }, { id: "fission-sidekick" }, { id: "fission-small" }, { id: "fission-design" },
       ] }));
     });
     try {
@@ -99,13 +99,13 @@ describe("9Router discovery integration", () => {
         provider: { ...base.provider, baseUrl: mock.baseUrl },
         profiles: {
           ...base.profiles,
-          "fast": { ...base.profiles["fast"], modelId: "fusion-explore" },
-          "code": { ...base.profiles["code"], modelId: "fusion-sidekick" },
-          "reason": { ...base.profiles["reason"], modelId: "fusion-plan" },
-          "review": { ...base.profiles["review"], modelId: "fusion-reviewer" },
-          "research": { ...base.profiles["research"], modelId: "fusion-research" },
-          "vision": { ...base.profiles["vision"], modelId: "fusion-vision" },
-          "design": { ...base.profiles["design"], modelId: "fusion-design" },
+          "fast": { ...base.profiles["fast"], modelId: "fission-explore" },
+          "code": { ...base.profiles["code"], modelId: "fission-sidekick" },
+          "reason": { ...base.profiles["reason"], modelId: "fission-plan" },
+          "review": { ...base.profiles["review"], modelId: "fission-reviewer" },
+          "research": { ...base.profiles["research"], modelId: "fission-research" },
+          "vision": { ...base.profiles["vision"], modelId: "fission-vision" },
+          "design": { ...base.profiles["design"], modelId: "fission-design" },
         },
       });
       const result = await discoverModels(config, { env });

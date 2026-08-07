@@ -3,12 +3,12 @@ import { describe, it } from "node:test";
 import { createDefaultConfig, parseConfig, type ConfigResult } from "../src/config.ts";
 import { classify } from "../src/classifier.ts";
 import { recommend } from "../src/policy.ts";
-import { footerText, formatConfig, formatExplain, formatSetup, formatStatus, type FusionView } from "../src/presentation.ts";
+import { footerText, formatConfig, formatExplain, formatSetup, formatStatus, type FissionView } from "../src/presentation.ts";
 import type { CanonicalProfile, Capabilities } from "../src/types.ts";
 import type { DiscoveryResult } from "../src/router.ts";
 import { validConfig } from "../test-support/helpers.ts";
 
-const readyConfig = (): ConfigResult => ({ status: "ready", path: "/safe/pi-fusion.json", config: validConfig(), diagnostics: [] });
+const readyConfig = (): ConfigResult => ({ status: "ready", path: "/safe/pi-fission.json", config: validConfig(), diagnostics: [] });
 const allModels = Object.fromEntries(["fast", "code", "reason", "review", "research", "vision", "design"].map((id) => [id, id])) as Record<CanonicalProfile, string>;
 const allCapabilities = Object.fromEntries(
   Object.entries(validConfig().profiles).map(([profile, config]) => [profile, config.capabilities]),
@@ -21,7 +21,7 @@ function readyDiscovery(overrides: Partial<DiscoveryResult> = {}): DiscoveryResu
   };
 }
 
-function baseView(overrides: Partial<FusionView> = {}): FusionView {
+function baseView(overrides: Partial<FissionView> = {}): FissionView {
   return {
     config: readyConfig(), discovery: readyDiscovery(), classification: null, recommendation: null,
     activeModel: "existing/actual-model", setup: null, routingStatus: "idle", routingReason: null, ...overrides,
@@ -31,9 +31,9 @@ function baseView(overrides: Partial<FusionView> = {}): FusionView {
 describe("config diagnostics", () => {
   it("provides conventional seven-group defaults", () => {
     const config = createDefaultConfig();
-    assert.equal(config.profiles.fast.modelId, "fusion-explore");
-    assert.equal(config.profiles.code.modelId, "fusion-sidekick");
-    assert.equal(config.profiles.design.modelId, "fusion-design");
+    assert.equal(config.profiles.fast.modelId, "fission-explore");
+    assert.equal(config.profiles.code.modelId, "fission-sidekick");
+    assert.equal(config.profiles.design.modelId, "fission-design");
     assert.equal(config.mode, "shadow");
     assert.equal(config.telemetry.enabled, false);
     assert.equal(config.tuning.enabled, false);
@@ -82,7 +82,7 @@ describe("minimal status UI", () => {
 
   it("shows seven mappings and concise setup status", () => {
     assert.match(formatConfig(baseView()), /profiles 7/);
-    assert.match(formatConfig(baseView()), /fast\s+fusion-explore/);
+    assert.match(formatConfig(baseView()), /fast\s+fission-explore/);
     assert.match(formatSetup(baseView()), /incomplete/);
   });
 });

@@ -1,4 +1,4 @@
-import type { CanonicalProfile, Capabilities, FusionConfig } from "./types.ts";
+import type { CanonicalProfile, Capabilities, FissionConfig } from "./types.ts";
 import { CANONICAL_PROFILES } from "./types.ts";
 import { resolveApiKey } from "./config.ts";
 
@@ -102,7 +102,7 @@ export function constrainCapabilities(configured: Capabilities, discovered: Disc
   };
 }
 
-export function resolveProfiles(config: FusionConfig, models: readonly DiscoveredModel[]): Partial<Record<CanonicalProfile, string>> {
+export function resolveProfiles(config: FissionConfig, models: readonly DiscoveredModel[]): Partial<Record<CanonicalProfile, string>> {
   const available = new Set(models.map((model) => model.id));
   const result: Partial<Record<CanonicalProfile, string>> = {};
   const aliases = Object.entries(config.aliases).sort(([left], [right]) => left.localeCompare(right));
@@ -121,7 +121,7 @@ export function resolveProfiles(config: FusionConfig, models: readonly Discovere
 }
 
 function effectiveCapabilities(
-  config: FusionConfig,
+  config: FissionConfig,
   models: readonly DiscoveredModel[],
   resolvedProfiles: Partial<Record<CanonicalProfile, string>>,
 ): Partial<Record<CanonicalProfile, Capabilities>> {
@@ -136,7 +136,7 @@ function effectiveCapabilities(
 }
 
 export async function discoverModels(
-  config: FusionConfig,
+  config: FissionConfig,
   options: { fetch?: typeof fetch; env?: NodeJS.ProcessEnv } = {},
 ): Promise<DiscoveryResult> {
   if (config.mode === "off") return emptyResult("disabled", "extension is disabled");

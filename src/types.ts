@@ -34,7 +34,7 @@ export interface ProjectOverride {
   profiles: Partial<Record<CanonicalProfile, string>>;
 }
 
-/** Retained in config v2 solely for backwards compatibility. Fusion no longer tunes itself. */
+/** Retained in config v2 solely for backwards compatibility. Fission no longer tunes itself. */
 export interface TuningConfig {
   enabled: boolean;
   file: string;
@@ -46,7 +46,7 @@ export interface TuningConfig {
   maxSwitches: number;
 }
 
-export interface FusionConfig {
+export interface FissionConfig {
   version: 2;
   mode: Mode;
   provider: {

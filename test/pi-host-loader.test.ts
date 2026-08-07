@@ -20,8 +20,8 @@ interface RpcMessage {
 
 describe("Pi host loader", () => {
   it("loads the explicit extension in Pi 0.83 and runs a diagnostic command without an agent turn", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "pi-fusion-host-loader-"));
-    const configPath = join(directory, "pi-fusion.json");
+    const directory = await mkdtemp(join(tmpdir(), "pi-fission-host-loader-"));
+    const configPath = join(directory, "pi-fission.json");
     const base = validConfig();
     await writeFile(configPath, JSON.stringify(validConfig({
       mode: "off",
@@ -31,7 +31,7 @@ describe("Pi host loader", () => {
 
     const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
     const pi = join(packageRoot, "node_modules", ".bin", "pi");
-    const extension = join(packageRoot, "extensions", "pi-fusion.ts");
+    const extension = join(packageRoot, "extensions", "pi-fission.ts");
     const child = spawn(pi, [
       "--mode", "rpc",
       "--no-session",
@@ -40,7 +40,7 @@ describe("Pi host loader", () => {
       "--extension", extension,
     ], {
       cwd: directory,
-      env: { ...process.env, PI_FUSION_CONFIG_PATH: configPath },
+      env: { ...process.env, PI_FISSION_CONFIG_PATH: configPath },
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -92,21 +92,21 @@ describe("Pi host loader", () => {
                 finish(new Error(`get_commands failed: ${message.error ?? "unknown error"}`));
                 return;
               }
-              const command = message.data?.commands?.find((entry) => entry.name === "fusion-config");
+              const command = message.data?.commands?.find((entry) => entry.name === "fission-config");
               if (command?.source !== "extension") {
-                finish(new Error("fusion-config was not loaded from the explicit extension"));
+                finish(new Error("fission-config was not loaded from the explicit extension"));
                 return;
               }
-              send({ id: "diagnostic", type: "prompt", message: "/fusion-config" });
+              send({ id: "diagnostic", type: "prompt", message: "/fission-config" });
             } else if (message.type === "extension_ui_request" && message.method === "notify") {
-              if (message.message?.includes("fusion config: off")) sawDiagnostic = true;
+              if (message.message?.includes("fission config: off")) sawDiagnostic = true;
             } else if (message.type === "response" && message.id === "diagnostic") {
               if (!message.success) {
-                finish(new Error(`fusion-config failed: ${message.error ?? "unknown error"}`));
+                finish(new Error(`fission-config failed: ${message.error ?? "unknown error"}`));
                 return;
               }
               if (!sawDiagnostic) {
-                finish(new Error("fusion-config completed without its diagnostic notification"));
+                finish(new Error("fission-config completed without its diagnostic notification"));
                 return;
               }
               finish();

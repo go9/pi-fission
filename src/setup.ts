@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { CanonicalProfile, FusionConfig, ProbeResult, SetupState } from "./types.ts";
+import type { CanonicalProfile, FissionConfig, ProbeResult, SetupState } from "./types.ts";
 import { CANONICAL_PROFILES } from "./types.ts";
 import { DEFAULT_PROFILE_CAPABILITIES, defaultSetupStatePath, isLoopbackUrl, resolveApiKey } from "./config.ts";
 
@@ -38,7 +38,7 @@ function modelExists(models: readonly { id: string }[], modelId: string): boolea
 }
 
 /** Validate that every profile target resolves and meets its capability floor. */
-export function diagnoseSetup(config: FusionConfig, models: readonly { id: string; capabilities?: unknown }[]): SetupDiagnostic[] {
+export function diagnoseSetup(config: FissionConfig, models: readonly { id: string; capabilities?: unknown }[]): SetupDiagnostic[] {
   return CANONICAL_PROFILES.map((profile) => {
     const target = config.profiles[profile].modelId;
     const issues: string[] = [];
@@ -85,7 +85,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Run one real minimal inference probe against a profile target. */
 export async function runProbe(
-  config: FusionConfig,
+  config: FissionConfig,
   profile: CanonicalProfile,
   target: string,
   options: SetupProbeOptions = {},
@@ -175,7 +175,7 @@ export async function runProbe(
 
 /** Probe all seven profiles; returns results plus aggregate readiness. */
 export async function probeAll(
-  config: FusionConfig,
+  config: FissionConfig,
   options: SetupProbeOptions = {},
 ): Promise<{ probes: Partial<Record<CanonicalProfile, ProbeResult>>; complete: boolean; failures: CanonicalProfile[] }> {
   const probes: Partial<Record<CanonicalProfile, ProbeResult>> = {};
@@ -212,7 +212,7 @@ export async function saveSetupState(configPath: string, state: SetupState): Pro
 
 /** True when active mode may proceed: seven probed profiles, all passing,
  *  and every probe target still matches the configured target for that profile. */
-export function isActiveReady(config: FusionConfig, setup: SetupState): boolean {
+export function isActiveReady(config: FissionConfig, setup: SetupState): boolean {
   if (config.mode !== "active") return false;
   if (!setup.complete) return false;
   return CANONICAL_PROFILES.every((profile) => {

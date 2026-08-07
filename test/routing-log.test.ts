@@ -13,7 +13,7 @@ const baseEntry = (overrides: Partial<RoutingLogEntry> = {}): RoutingLogEntry =>
   phase: "implement",
   profile: "code",
   fromModel: "existing/original",
-  toModel: "fusion-sidekick",
+  toModel: "fission-sidekick",
   switched: true,
   reason: "writing code",
   reasonCodes: ["phase.implement", "policy.preferred"],
@@ -23,14 +23,14 @@ const baseEntry = (overrides: Partial<RoutingLogEntry> = {}): RoutingLogEntry =>
 
 describe("routing log", () => {
   it("appends, reads, and formats entries without any prompt content", async () => {
-    const dir = await import("node:fs/promises").then((fs) => fs.mkdtemp(join(tmpdir(), "fusion-routing-")));
-    const configPath = join(dir, "pi-fusion.json");
+    const dir = await import("node:fs/promises").then((fs) => fs.mkdtemp(join(tmpdir(), "fission-routing-")));
+    const configPath = join(dir, "pi-fission.json");
     await appendRoutingEntry(configPath, baseEntry({ sessionId: "session-main" }));
     await appendRoutingEntry(configPath, baseEntry({
       sessionId: "session-child-1",
       phase: "explore",
       profile: "fast",
-      toModel: "fusion-explore",
+      toModel: "fission-explore",
       reason: "exploring the codebase",
       reasonCodes: ["phase.explore"],
     }));
@@ -41,15 +41,15 @@ describe("routing log", () => {
     assert.doesNotMatch(text, /prompt|secret|code content/i);
     const formatted = formatRoutingLog(entries);
     assert.match(formatted, /session-main/);
-    assert.match(formatted, /switched to fusion-sidekick because writing code/);
+    assert.match(formatted, /switched to fission-sidekick because writing code/);
     assert.match(formatted, /session-child-1/);
-    assert.match(formatted, /switched to fusion-explore because exploring the codebase/);
+    assert.match(formatted, /switched to fission-explore because exploring the codebase/);
     await rm(dir, { recursive: true, force: true });
   });
 
   it("skips malformed lines from concurrent writers", async () => {
-    const dir = await import("node:fs/promises").then((fs) => fs.mkdtemp(join(tmpdir(), "fusion-routing-")));
-    const configPath = join(dir, "pi-fusion.json");
+    const dir = await import("node:fs/promises").then((fs) => fs.mkdtemp(join(tmpdir(), "fission-routing-")));
+    const configPath = join(dir, "pi-fission.json");
     await appendRoutingEntry(configPath, baseEntry());
     const fs = await import("node:fs/promises");
     await fs.appendFile(routingLogPath(configPath), "{broken\n", "utf8");
@@ -59,8 +59,8 @@ describe("routing log", () => {
   });
 
   it("summarizes sessions and renders widget rows without prompt content", async () => {
-    const dir = await import("node:fs/promises").then((fs) => fs.mkdtemp(join(tmpdir(), "fusion-summary-")));
-    const configPath = join(dir, "pi-fusion.json");
+    const dir = await import("node:fs/promises").then((fs) => fs.mkdtemp(join(tmpdir(), "fission-summary-")));
+    const configPath = join(dir, "pi-fission.json");
     await appendRoutingEntry(configPath, baseEntry({ sessionId: "main", ts: "2026-08-07T10:00:00.000Z" }));
     await appendRoutingEntry(configPath, baseEntry({
       sessionId: "child",
@@ -68,19 +68,19 @@ describe("routing log", () => {
       ts: "2026-08-07T10:01:00.000Z",
       phase: "review",
       profile: "review",
-      toModel: "fusion-reviewer",
+      toModel: "fission-reviewer",
       reason: "reviewing the work",
     }));
     await appendRoutingEntry(configPath, baseEntry({ sessionId: "stale", ts: "2026-08-01T00:00:00.000Z" }));
     const summaries = sessionSummaries(await readRoutingEntries(configPath), Date.parse("2026-08-07T10:02:00.000Z"));
     assert.equal(summaries.length, 2, "stale session is windowed out");
     const collapsed = widgetRows(summaries, "main", false);
-    assert.equal(collapsed[0], "fusion: 2 agents routing · ctrl+alt+f for details");
+    assert.equal(collapsed[0], "fission: 2 agents routing · ctrl+alt+f for details");
     const expanded = widgetRows(summaries, "main", true);
-    assert.ok(expanded.some((row) => /main\s+fusion-sidekick · writing code/.test(row)));
-    assert.ok(expanded.some((row) => /reviewer\s+fusion-reviewer · reviewing the work/.test(row)));
+    assert.ok(expanded.some((row) => /main\s+fission-sidekick · writing code/.test(row)));
+    assert.ok(expanded.some((row) => /reviewer\s+fission-reviewer · reviewing the work/.test(row)));
     assert.doesNotMatch(expanded.join("\n"), /secret|prompt text/i);
-    assert.match(formatAgents(summaries, "main"), /reviewer — fusion-reviewer · reviewing the work/);
+    assert.match(formatAgents(summaries, "main"), /reviewer — fission-reviewer · reviewing the work/);
     await rm(dir, { recursive: true, force: true });
   });
 

@@ -2,22 +2,22 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { FusionConfig } from "../src/types.ts";
+import type { FissionConfig } from "../src/types.ts";
 import { DEFAULT_PROFILE_CAPABILITIES } from "../src/config.ts";
 
-export function validConfig(overrides: Partial<FusionConfig> = {}): FusionConfig {
-  const config: FusionConfig = {
+export function validConfig(overrides: Partial<FissionConfig> = {}): FissionConfig {
+  const config: FissionConfig = {
     version: 2,
     mode: "shadow",
     provider: { id: "9router", baseUrl: "http://127.0.0.1:1/v1", apiKey: "$TEST_9ROUTER_KEY", timeoutMs: 200 },
     profiles: {
-      fast: { modelId: "fusion-explore", capabilities: DEFAULT_PROFILE_CAPABILITIES.fast },
-      code: { modelId: "fusion-sidekick", capabilities: DEFAULT_PROFILE_CAPABILITIES.code },
-      reason: { modelId: "fusion-plan", capabilities: DEFAULT_PROFILE_CAPABILITIES.reason },
-      review: { modelId: "fusion-reviewer", capabilities: DEFAULT_PROFILE_CAPABILITIES.review },
-      research: { modelId: "fusion-research", capabilities: DEFAULT_PROFILE_CAPABILITIES.research },
-      vision: { modelId: "fusion-vision", capabilities: DEFAULT_PROFILE_CAPABILITIES.vision },
-      design: { modelId: "fusion-design", capabilities: DEFAULT_PROFILE_CAPABILITIES.design },
+      fast: { modelId: "fission-explore", capabilities: DEFAULT_PROFILE_CAPABILITIES.fast },
+      code: { modelId: "fission-sidekick", capabilities: DEFAULT_PROFILE_CAPABILITIES.code },
+      reason: { modelId: "fission-plan", capabilities: DEFAULT_PROFILE_CAPABILITIES.reason },
+      review: { modelId: "fission-reviewer", capabilities: DEFAULT_PROFILE_CAPABILITIES.review },
+      research: { modelId: "fission-research", capabilities: DEFAULT_PROFILE_CAPABILITIES.research },
+      vision: { modelId: "fission-vision", capabilities: DEFAULT_PROFILE_CAPABILITIES.vision },
+      design: { modelId: "fission-design", capabilities: DEFAULT_PROFILE_CAPABILITIES.design },
     },
     aliases: { plan: "reason", sidekick: "code", explore: "fast", "small-model": "fast", reviewer: "review", research: "research", vision: "vision", design: "design" },
     projectOverrides: [],
@@ -36,9 +36,9 @@ export function validConfig(overrides: Partial<FusionConfig> = {}): FusionConfig
   };
 }
 
-export async function writeConfig(config: FusionConfig): Promise<{ dir: string; path: string }> {
-  const dir = await mkdtemp(join(tmpdir(), "pi-fusion-test-"));
-  const path = join(dir, "pi-fusion.json");
+export async function writeConfig(config: FissionConfig): Promise<{ dir: string; path: string }> {
+  const dir = await mkdtemp(join(tmpdir(), "pi-fission-test-"));
+  const path = join(dir, "pi-fission.json");
   await writeFile(path, JSON.stringify(config), "utf8");
   return { dir, path };
 }

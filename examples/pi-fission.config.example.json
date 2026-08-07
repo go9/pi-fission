@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "mode": "shadow",
+  "provider": {
+    "id": "9router",
+    "baseUrl": "http://127.0.0.1:20128/v1",
+    "apiKey": "$NINE_ROUTER_API_KEY",
+    "timeoutMs": 15000
+  },
+  "profiles": {
+    "fast": { "modelId": "fission-explore", "capabilities": { "tools": true, "reasoning": false, "image": false, "structuredOutput": false, "contextWindow": 64000 } },
+    "code": { "modelId": "fission-sidekick", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": true, "contextWindow": 128000 } },
+    "reason": { "modelId": "fission-plan", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": true, "contextWindow": 200000 } },
+    "review": { "modelId": "fission-reviewer", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": true, "contextWindow": 200000 } },
+    "research": { "modelId": "fission-research", "capabilities": { "tools": true, "reasoning": true, "image": false, "structuredOutput": false, "contextWindow": 200000 } },
+    "vision": { "modelId": "fission-vision", "capabilities": { "tools": true, "reasoning": true, "image": true, "structuredOutput": false, "contextWindow": 128000 } },
+    "design": { "modelId": "fission-design", "capabilities": { "tools": true, "reasoning": true, "image": true, "structuredOutput": false, "contextWindow": 128000 } }
+  },
+  "aliases": {
+    "plan": "reason",
+    "sidekick": "code",
+    "explore": "fast",
+    "reviewer": "review",
+    "research": "research",
+    "vision": "vision",
+    "design": "design"
+  },
+  "projectOverrides": [],
+  "telemetry": { "enabled": false, "file": "pi-fission.telemetry.jsonl", "maxEntries": 200 },
+  "tuning": { "enabled": false, "file": "pi-fission.tuning.jsonl", "maxEntries": 200, "minEvidence": 5, "maxFanout": 4, "maxDepth": 2, "maxRetries": 3, "maxSwitches": 4 }
+}

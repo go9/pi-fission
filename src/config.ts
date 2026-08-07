@@ -5,7 +5,7 @@ import {
   CANONICAL_PROFILES,
   type CanonicalProfile,
   type Capabilities,
-  type FusionConfig,
+  type FissionConfig,
   type Mode,
   type ProfileConfig,
   type ProjectOverride,
@@ -33,13 +33,13 @@ const LEGACY_ID_MAP: Record<string, CanonicalProfile> = {
 };
 
 export const DEFAULT_PROFILE_MODELS: Record<CanonicalProfile, string> = {
-  fast: "fusion-explore",
-  code: "fusion-sidekick",
-  reason: "fusion-plan",
-  review: "fusion-reviewer",
-  research: "fusion-research",
-  vision: "fusion-vision",
-  design: "fusion-design",
+  fast: "fission-explore",
+  code: "fission-sidekick",
+  reason: "fission-plan",
+  review: "fission-reviewer",
+  research: "fission-research",
+  vision: "fission-vision",
+  design: "fission-design",
 };
 
 export const DEFAULT_PROFILE_CAPABILITIES: Record<CanonicalProfile, Capabilities> = {
@@ -53,7 +53,7 @@ export const DEFAULT_PROFILE_CAPABILITIES: Record<CanonicalProfile, Capabilities
 };
 
 export type ConfigResult =
-  | { status: "ready"; path: string; config: FusionConfig; diagnostics: [] }
+  | { status: "ready"; path: string; config: FissionConfig; diagnostics: [] }
   | { status: "unconfigured" | "invalid-config"; path: string; config: null; diagnostics: string[] };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -137,7 +137,7 @@ export function migrateLegacyConfig(value: Record<string, unknown>): Record<stri
   };
 }
 
-export function parseConfig(value: unknown): { config: FusionConfig | null; diagnostics: string[] } {
+export function parseConfig(value: unknown): { config: FissionConfig | null; diagnostics: string[] } {
   const errors: string[] = [];
   if (!isRecord(value)) return { config: null, diagnostics: ["config root must be an object"] };
 
@@ -303,11 +303,11 @@ export function parseConfig(value: unknown): { config: FusionConfig | null; diag
   };
 }
 
-export function createDefaultConfig(overrides: Partial<Record<CanonicalProfile, string>> = {}): FusionConfig {
+export function createDefaultConfig(overrides: Partial<Record<CanonicalProfile, string>> = {}): FissionConfig {
   const profiles = Object.fromEntries(CANONICAL_PROFILES.map((profile) => [profile, {
     modelId: overrides[profile] ?? DEFAULT_PROFILE_MODELS[profile],
     capabilities: DEFAULT_PROFILE_CAPABILITIES[profile],
-  }])) as FusionConfig["profiles"];
+  }])) as FissionConfig["profiles"];
   return {
     version: 2,
     mode: "shadow",
@@ -320,10 +320,10 @@ export function createDefaultConfig(overrides: Partial<Record<CanonicalProfile, 
     profiles,
     aliases: { ...DEFAULT_ALIASES },
     projectOverrides: [],
-    telemetry: { enabled: false, file: "pi-fusion.telemetry.jsonl", maxEntries: 200 },
+    telemetry: { enabled: false, file: "pi-fission.telemetry.jsonl", maxEntries: 200 },
     tuning: {
       enabled: false,
-      file: "pi-fusion.tuning.jsonl",
+      file: "pi-fission.tuning.jsonl",
       maxEntries: 200,
       minEvidence: 5,
       maxFanout: 4,
@@ -335,26 +335,26 @@ export function createDefaultConfig(overrides: Partial<Record<CanonicalProfile, 
 }
 
 export function defaultConfigPath(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.PI_FUSION_CONFIG_PATH?.trim();
-  return override || join(getAgentDir(), "extensions", "pi-fusion.json");
+  const override = env.PI_FISSION_CONFIG_PATH?.trim();
+  return override || join(getAgentDir(), "extensions", "pi-fission.json");
 }
 
 export function defaultSetupStatePath(configPath: string): string {
-  return join(dirname(configPath), "pi-fusion.setup.json");
+  return join(dirname(configPath), "pi-fission.setup.json");
 }
 
 export function defaultTuningPath(configPath: string): string {
-  return join(dirname(configPath), "pi-fusion.tuning.jsonl");
+  return join(dirname(configPath), "pi-fission.tuning.jsonl");
 }
 
-export function telemetryPath(configPath: string, config: FusionConfig): string {
+export function telemetryPath(configPath: string, config: FissionConfig): string {
   return join(dirname(configPath), config.telemetry.file);
 }
 
 /** Effective profile target for a repository, applying project overrides.
  *  Only an override whose repo matches the given path applies; otherwise the
  *  global target is returned. */
-export function effectiveProfileTarget(config: FusionConfig, profile: CanonicalProfile, repo?: string): string {
+export function effectiveProfileTarget(config: FissionConfig, profile: CanonicalProfile, repo?: string): string {
   if (repo) {
     for (const override of config.projectOverrides) {
       if (override.repo !== repo) continue;
@@ -386,7 +386,7 @@ export async function loadConfig(path = defaultConfigPath()): Promise<ConfigResu
   return { status: "ready", path, config: parsed.config, diagnostics: [] };
 }
 
-export async function saveConfig(path: string, config: FusionConfig): Promise<void> {
+export async function saveConfig(path: string, config: FissionConfig): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createFusionExtension } from "../src/extension.ts";
+import { createFissionExtension } from "../src/extension.ts";
 import { listen, validConfig, writeConfig } from "../test-support/helpers.ts";
 import { CANONICAL_PROFILES, type SetupState } from "../src/types.ts";
 
@@ -97,20 +97,20 @@ async function fixture(mode: "active" | "shadow" = "active") {
   const base = validConfig();
   const config = validConfig({ mode, provider: { ...base.provider, baseUrl: mock.baseUrl } });
   const saved = await writeConfig(config);
-  await writeFile(join(saved.dir, "pi-fusion.setup.json"), JSON.stringify(completeSetup(config)), "utf8");
+  await writeFile(join(saved.dir, "pi-fission.setup.json"), JSON.stringify(completeSetup(config)), "utf8");
   return { mock, config, ...saved };
 }
 
-describe("router-only Pi Fusion extension", () => {
+describe("router-only Pi Fission extension", () => {
   it("registers only setup and routing diagnostics", async () => {
     const saved = await fixture("shadow");
     const runtime = fakeApi();
     try {
-      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       assert.deepEqual([...runtime.commands.keys()].sort(), [
-        "fusion", "fusion-agents", "fusion-config", "fusion-explain", "fusion-mode", "fusion-routing", "fusion-setup", "fusion-setup-status", "fusion-status",
+        "fission", "fission-agents", "fission-config", "fission-explain", "fission-mode", "fission-routing", "fission-setup", "fission-setup-status", "fission-status",
       ]);
-      assert.equal(runtime.handlers.has("tool_call"), false, "Fusion never intercepts tools");
+      assert.equal(runtime.handlers.has("tool_call"), false, "Fission never intercepts tools");
       assert.equal(runtime.handlers.has("tool_result"), false);
       assert.equal(runtime.providers.length, 1);
     } finally {
@@ -124,7 +124,7 @@ describe("router-only Pi Fusion extension", () => {
     const target = { provider: "9router", id: saved.config.profiles.code.modelId };
     const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target]);
     try {
-      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       await emit(runtime, context, "before_agent_start", { prompt: "Implement a TypeScript helper", images: [] });
       assert.deepEqual(runtime.selectionCalls[0], target);
       await emit(runtime, context, "agent_settled", {});
@@ -141,13 +141,13 @@ describe("router-only Pi Fusion extension", () => {
     const notifications: string[] = [];
     const context = fakeContext(tmpdir(), notifications, { provider: "existing", id: "original" }, [target]);
     try {
-      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       await emit(runtime, context, "before_agent_start", {
         prompt: "Inspect the inventory listings and items pages and let's improve the usability",
         images: [],
       });
       assert.equal(runtime.handlers.has("tool_call"), false);
-      assert.equal(runtime.commands.has("fusion-plan"), false);
+      assert.equal(runtime.commands.has("fission-plan"), false);
       assert.ok(notifications.some((line) => line.includes("→")), JSON.stringify(notifications));
     } finally {
       await saved.mock.close();
@@ -160,7 +160,7 @@ describe("router-only Pi Fusion extension", () => {
     const notifications: string[] = [];
     const context = fakeContext(tmpdir(), notifications, { provider: "existing", id: "original" }, []);
     try {
-      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
       assert.equal(runtime.selectionCalls.length, 0);
       assert.ok(notifications.some((line) => line.includes("retained current")), JSON.stringify(notifications));
@@ -175,7 +175,7 @@ describe("router-only Pi Fusion extension", () => {
     const target = { provider: "9router", id: saved.config.profiles.code.modelId };
     const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target]);
     try {
-      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       // First prompt starts the session and routes normally.
       await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
       assert.equal(runtime.selectionCalls.length, 1);
@@ -183,7 +183,7 @@ describe("router-only Pi Fusion extension", () => {
       await emit(runtime, context, "model_select", { model: { provider: "existing", id: "manual" } });
       await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
       assert.equal(runtime.selectionCalls.length, 1, "manual selection must pause routing");
-      await runtime.commands.get("fusion-mode")?.("active", context);
+      await runtime.commands.get("fission-mode")?.("active", context);
       await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
       assert.equal(runtime.selectionCalls.length, 2, "re-enabling resumes routing");
     } finally {
@@ -197,7 +197,7 @@ describe("router-only Pi Fusion extension", () => {
     const target = { provider: "9router", id: saved.config.profiles.code.modelId };
     const context = fakeContext(tmpdir(), [], { provider: "opencode-go", id: "deepseek-v4-flash" }, [target]);
     try {
-      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       // Session startup selects the default model before any prompt.
       await emit(runtime, context, "model_select", { model: { provider: "opencode-go", id: "deepseek-v4-flash" } });
       await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
@@ -213,7 +213,7 @@ describe("router-only Pi Fusion extension", () => {
     const target = { provider: "9router", id: saved.config.profiles.reason.modelId };
     const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target], "high");
     try {
-      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       await emit(runtime, context, "before_agent_start", { prompt: "Plan an architecture migration", images: [] });
       runtime.setThinking("low");
       await emit(runtime, context, "thinking_level_select", { previousLevel: "high", level: "low" });
@@ -229,8 +229,8 @@ describe("router-only Pi Fusion extension", () => {
       response.setHeader("content-type", "application/json");
       if (request.url === "/v1/models") {
         response.end(JSON.stringify({ data: [
-          { id: "fusion-explore" }, { id: "fusion-sidekick" }, { id: "fusion-plan" }, { id: "fusion-reviewer" },
-          { id: "fusion-research" }, { id: "fusion-vision" }, { id: "fusion-design" },
+          { id: "fission-explore" }, { id: "fission-sidekick" }, { id: "fission-plan" }, { id: "fission-reviewer" },
+          { id: "fission-research" }, { id: "fission-vision" }, { id: "fission-design" },
         ] }));
         return;
       }
@@ -242,7 +242,7 @@ describe("router-only Pi Fusion extension", () => {
     const notifications: string[] = [];
     const context = fakeContext(tmpdir(), notifications);
     try {
-      await createFusionExtension(runtime.api, {
+      await createFissionExtension(runtime.api, {
         configPath: saved.path,
         env: { NINE_ROUTER_API_KEY: "test" },
         fetch: async (input, init) => {
@@ -250,10 +250,10 @@ describe("router-only Pi Fusion extension", () => {
           return fetch(`${mock.baseUrl}${url.pathname.replace(/^\/v1/, "")}`, init);
         },
       });
-      await runtime.commands.get("fusion-setup")?.("", context);
+      await runtime.commands.get("fission-setup")?.("", context);
       const config = JSON.parse(await readFile(saved.path, "utf8"));
       assert.equal(config.mode, "active");
-      assert.equal(config.profiles.design.modelId, "fusion-design");
+      assert.equal(config.profiles.design.modelId, "fission-design");
       assert.ok(notifications.some((line) => line.includes("7/7 profiles passed")));
     } finally {
       await mock.close();
@@ -266,9 +266,9 @@ describe("router-only Pi Fusion extension", () => {
     const target = { provider: "9router", id: saved.config.profiles.code.modelId };
     const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target]);
     try {
-      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       await emit(runtime, context, "before_agent_start", { prompt: "Implement a TypeScript helper", images: [] });
-      const entries = JSON.parse(await readFile(join(saved.dir, "pi-fusion.routing.jsonl"), "utf8"));
+      const entries = JSON.parse(await readFile(join(saved.dir, "pi-fission.routing.jsonl"), "utf8"));
       assert.equal(entries.kind, "route");
       assert.equal(entries.profile, "code");
       assert.equal(entries.toModel, saved.config.profiles.code.modelId);
@@ -287,7 +287,7 @@ describe("router-only Pi Fusion extension", () => {
     const target = { provider: "9router", id: saved.config.profiles.code.modelId };
     const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target]);
     try {
-      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
       assert.equal(runtime.selectionCalls.length, 1);
       // Pi re-applies the restored model after the turn settles; this must not pause routing.
@@ -305,10 +305,10 @@ describe("router-only Pi Fusion extension", () => {
     const target = { provider: "9router", id: saved.config.profiles.code.modelId };
     const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target]);
     try {
-      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
       assert.equal(runtime.selectionCalls.length, 1);
-      // Turn settles; Fusion restores the previous model (second selection).
+      // Turn settles; Fission restores the previous model (second selection).
       await emit(runtime, context, "agent_settled", {});
       assert.equal(runtime.selectionCalls.length, 2);
       // Pi emits a late set-source event for the restored model after the restore finished.
@@ -326,10 +326,10 @@ describe("router-only Pi Fusion extension", () => {
     const notifications: string[] = [];
     const context = fakeContext(tmpdir(), notifications);
     try {
-      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       await emit(runtime, context, "session_start", {});
       assert.ok(runtime.shortcuts.has("ctrl+alt+f"), "toggle shortcut registered");
-      assert.ok(notifications.some((line) => line.startsWith("widget:pi-fusion-agents:")), JSON.stringify(notifications));
+      assert.ok(notifications.some((line) => line.startsWith("widget:pi-fission-agents:")), JSON.stringify(notifications));
       assert.ok(notifications.some((line) => /0 agents routing/.test(line)));
     } finally {
       await saved.mock.close();
@@ -343,13 +343,13 @@ describe("router-only Pi Fusion extension", () => {
     const notifications: string[] = [];
     const context = fakeContext(tmpdir(), notifications, { provider: "existing", id: "original" }, [target]);
     try {
-      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       await emit(runtime, context, "session_start", {});
       await emit(runtime, context, "before_agent_start", { prompt: "Implement a TypeScript helper", images: [] });
       await runtime.shortcuts.get("ctrl+alt+f")!.handler(context);
-      const expanded = notifications.filter((line) => line.startsWith("widget:pi-fusion-agents:")).at(-1);
-      assert.ok(expanded && /fusion workers \(1\)/.test(expanded), JSON.stringify(expanded));
-      assert.ok(expanded && /main\s+fusion-sidekick · writing code/.test(expanded), JSON.stringify(expanded));
+      const expanded = notifications.filter((line) => line.startsWith("widget:pi-fission-agents:")).at(-1);
+      assert.ok(expanded && /fission workers \(1\)/.test(expanded), JSON.stringify(expanded));
+      assert.ok(expanded && /main\s+fission-sidekick · writing code/.test(expanded), JSON.stringify(expanded));
     } finally {
       await saved.mock.close();
     }
@@ -361,10 +361,10 @@ describe("router-only Pi Fusion extension", () => {
     const notifications: string[] = [];
     const context = fakeContext(tmpdir(), notifications);
     try {
-      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
-      await runtime.commands.get("fusion-mode")?.("  shadow  ", context);
-      assert.ok(notifications.includes("fusion mode: shadow"));
-      assert.equal(runtime.commands.has("fusion-workflow"), false);
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await runtime.commands.get("fission-mode")?.("  shadow  ", context);
+      assert.ok(notifications.includes("fission mode: shadow"));
+      assert.equal(runtime.commands.has("fission-workflow"), false);
     } finally {
       await saved.mock.close();
     }

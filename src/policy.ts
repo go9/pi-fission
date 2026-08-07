@@ -3,7 +3,7 @@ import {
   type CanonicalProfile,
   type Capabilities,
   type Classification,
-  type FusionConfig,
+  type FissionConfig,
   type Recommendation,
 } from "./types.ts";
 
@@ -43,7 +43,7 @@ export function capabilityGaps(required: Capabilities, available: Capabilities):
 
 export interface PolicyInput {
   classification: Classification;
-  config: FusionConfig;
+  config: FissionConfig;
   resolvedModels: Partial<Record<CanonicalProfile, string>>;
   effectiveCapabilities?: Partial<Record<CanonicalProfile, Capabilities>>;
   providerReady: boolean;

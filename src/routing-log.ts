@@ -48,9 +48,9 @@ export function describeRouting(kind: RoutingLogEntry["kind"], phase: Phase | "u
   }
 }
 
-/** Default routing log path, next to the Fusion config so every session shares it. */
+/** Default routing log path, next to the Fission config so every session shares it. */
 export function routingLogPath(configPath: string): string {
-  return joinPath(dirname(configPath), "pi-fusion.routing.jsonl");
+  return joinPath(dirname(configPath), "pi-fission.routing.jsonl");
 }
 
 function joinPath(directory: string, name: string): string {
@@ -142,9 +142,9 @@ function sessionLabel(summary: SessionSummary, mainSessionId: string): string {
 export function widgetRows(summaries: SessionSummary[], mainSessionId: string, expanded: boolean): string[] {
   const count = summaries.length;
   if (!expanded) {
-    return [`fusion: ${count} agent${count === 1 ? "" : "s"} routing · ctrl+alt+f for details`];
+    return [`fission: ${count} agent${count === 1 ? "" : "s"} routing · ctrl+alt+f for details`];
   }
-  const rows: string[] = [`fusion workers (${count}) · ctrl+alt+f to collapse`];
+  const rows: string[] = [`fission workers (${count}) · ctrl+alt+f to collapse`];
   if (count === 0) rows.push("  (no active sessions in the last 15 minutes)");
   for (const summary of summaries) {
     const model = summary.currentModel ?? "unknown";
@@ -153,10 +153,10 @@ export function widgetRows(summaries: SessionSummary[], mainSessionId: string, e
   return rows;
 }
 
-/** Text version for /fusion-agents (works in every Pi mode). */
+/** Text version for /fission-agents (works in every Pi mode). */
 export function formatAgents(summaries: SessionSummary[], mainSessionId: string): string {
-  if (summaries.length === 0) return "fusion agents: no active sessions in the last 15 minutes";
-  const lines = [`fusion agents: ${summaries.length} active`];
+  if (summaries.length === 0) return "fission agents: no active sessions in the last 15 minutes";
+  const lines = [`fission agents: ${summaries.length} active`];
   for (const summary of summaries) {
     lines.push(`  ${sessionLabel(summary, mainSessionId)} — ${summary.currentModel ?? "unknown"} · ${summary.reason}`);
   }
@@ -165,14 +165,14 @@ export function formatAgents(summaries: SessionSummary[], mainSessionId: string)
 
 /** Render the routing history grouped by session. */
 export function formatRoutingLog(entries: RoutingLogEntry[]): string {
-  if (entries.length === 0) return "fusion routing: no routing activity recorded yet";
+  if (entries.length === 0) return "fission routing: no routing activity recorded yet";
   const sessions = new Map<string, RoutingLogEntry[]>();
   for (const entry of entries) {
     const list = sessions.get(entry.sessionId) ?? [];
     list.push(entry);
     sessions.set(entry.sessionId, list);
   }
-  const lines: string[] = ["fusion routing:"];
+  const lines: string[] = ["fission routing:"];
   for (const [sessionId, list] of sessions) {
     const latest = list[list.length - 1]!;
     const current = latest.kind === "manual" ? formatModel(latest.fromModel) : formatModel(latest.toModel ?? latest.fromModel);

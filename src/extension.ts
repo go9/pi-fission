@@ -17,7 +17,7 @@ import {
   formatExplain,
   formatSetup,
   formatStatus,
-  type FusionView,
+  type FissionView,
   type RoutingStatus,
 } from "./presentation.ts";
 import { diagnoseSetup, isActiveReady, loadSetupState, probeAll, saveSetupState } from "./setup.ts";
@@ -26,13 +26,13 @@ import type {
   ActiveThinkingLevel,
   CanonicalProfile,
   Classification,
-  FusionConfig,
+  FissionConfig,
   Recommendation,
   SetupState,
 } from "./types.ts";
 import { CANONICAL_PROFILES } from "./types.ts";
 
-export interface FusionExtensionOptions {
+export interface FissionExtensionOptions {
   configPath?: string;
   fetch?: typeof fetch;
   env?: NodeJS.ProcessEnv;
@@ -67,7 +67,7 @@ function displayModel(identity: ModelIdentity | null): string | null {
   return identity ? `${identity.provider}/${identity.id}` : null;
 }
 
-function profileForModel(config: FusionConfig, modelId: string, discovery?: DiscoveryResult | null): CanonicalProfile | null {
+function profileForModel(config: FissionConfig, modelId: string, discovery?: DiscoveryResult | null): CanonicalProfile | null {
   if (discovery) {
     for (const [profile, resolved] of Object.entries(discovery.resolvedProfiles) as [CanonicalProfile, string][]) {
       if (resolved === modelId) return profile;
@@ -79,13 +79,13 @@ function profileForModel(config: FusionConfig, modelId: string, discovery?: Disc
   return null;
 }
 
-function providerModels(config: FusionConfig, discovery: DiscoveryResult): DiscoveredModel[] {
+function providerModels(config: FissionConfig, discovery: DiscoveryResult): DiscoveredModel[] {
   if (discovery.status === "ready") return discovery.models;
   return [...new Set(CANONICAL_PROFILES.map((profile) => config.profiles[profile].modelId))]
     .map((id) => ({ id, name: id, capabilities: {} }));
 }
 
-function registerProvider(pi: ExtensionAPI, config: FusionConfig, discovery: DiscoveryResult): void {
+function registerProvider(pi: ExtensionAPI, config: FissionConfig, discovery: DiscoveryResult): void {
   const models = providerModels(config, discovery).map((model) => {
     const profile = profileForModel(config, model.id, discovery);
     const capabilities = profile
@@ -103,7 +103,7 @@ function registerProvider(pi: ExtensionAPI, config: FusionConfig, discovery: Dis
   });
   const keylessLoopback = config.provider.apiKey === undefined;
   pi.registerProvider(config.provider.id, {
-    name: "9Router (Pi Fusion)",
+    name: "9Router (Pi Fission)",
     baseUrl: config.provider.baseUrl,
     apiKey: config.provider.apiKey ?? "local",
     authHeader: !keylessLoopback,
@@ -121,17 +121,17 @@ function registerProvider(pi: ExtensionAPI, config: FusionConfig, discovery: Dis
   });
 }
 
-function asView(state: RuntimeState): FusionView {
+function asView(state: RuntimeState): FissionView {
   return state;
 }
 
 function updateFooter(state: RuntimeState, ctx: ExtensionContext): void {
-  if (ctx.mode === "tui") ctx.ui.setStatus("pi-fusion", footerText(asView(state)));
+  if (ctx.mode === "tui") ctx.ui.setStatus("pi-fission", footerText(asView(state)));
 }
 
 function show(ctx: ExtensionContext, message: string, level: "info" | "warning", stderr: (message: string) => void): void {
   if (ctx.hasUI) ctx.ui.notify(message, level);
-  else stderr(`[pi-fusion] ${message}\n`);
+  else stderr(`[pi-fission] ${message}\n`);
 }
 
 function words(args: string | string[] | undefined): string[] {
@@ -152,17 +152,17 @@ function setupMappings(args: string | string[] | undefined): { mappings: Partial
   return { mappings, error: null };
 }
 
-function applyMappings(config: FusionConfig, mappings: Partial<Record<CanonicalProfile, string>>): FusionConfig {
+function applyMappings(config: FissionConfig, mappings: Partial<Record<CanonicalProfile, string>>): FissionConfig {
   return {
     ...config,
     profiles: Object.fromEntries(CANONICAL_PROFILES.map((profile) => [profile, {
       ...config.profiles[profile],
       modelId: mappings[profile] ?? config.profiles[profile].modelId,
-    }])) as FusionConfig["profiles"],
+    }])) as FissionConfig["profiles"],
   };
 }
 
-export async function createFusionExtension(pi: ExtensionAPI, options: FusionExtensionOptions = {}): Promise<void> {
+export async function createFissionExtension(pi: ExtensionAPI, options: FissionExtensionOptions = {}): Promise<void> {
   const environment = options.env ?? process.env;
   const configPath = options.configPath ?? defaultConfigPath(environment);
   const stderr = options.stderr ?? ((message: string) => process.stderr.write(message));
@@ -404,13 +404,13 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     if (!widgetCtx || typeof widgetCtx.ui.setWidget !== "function") return;
     const entries = await readRoutingEntries(configPath);
     const summaries = sessionSummaries(entries, Date.now());
-    widgetCtx.ui.setWidget("pi-fusion-agents", widgetRows(summaries, state.sessionId, widgetExpanded));
+    widgetCtx.ui.setWidget("pi-fission-agents", widgetRows(summaries, state.sessionId, widgetExpanded));
   };
 
   const toggleWidget = (ctx: ExtensionContext): Promise<void> => {
     widgetExpanded = !widgetExpanded;
     const refreshed = refreshWidget();
-    report(ctx, widgetExpanded ? "fusion agents: expanded" : "fusion agents: collapsed", "info");
+    report(ctx, widgetExpanded ? "fission agents: expanded" : "fission agents: collapsed", "info");
     return refreshed;
   };
 
@@ -433,8 +433,8 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     if (widgetTimer) { clearInterval(widgetTimer); widgetTimer = null; }
     widgetCtx = null;
     if (ctx.mode === "tui") {
-      if (typeof ctx.ui.setWidget === "function") ctx.ui.setWidget("pi-fusion-agents", undefined);
-      ctx.ui.setStatus("pi-fusion", undefined);
+      if (typeof ctx.ui.setWidget === "function") ctx.ui.setWidget("pi-fission-agents", undefined);
+      ctx.ui.setStatus("pi-fission", undefined);
     }
   });
 
@@ -456,14 +456,14 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     }
     if (!state.setup || !isActiveReady(state.config.config, state.setup)) {
       state.routingStatus = "setup-blocked";
-      state.routingReason = "run /fusion-setup";
+      state.routingReason = "run /fission-setup";
       await recordRouting(ctx, previousModel);
       updateFooter(state, ctx);
       return;
     }
     if (manualOverride) {
       state.routingStatus = "manual";
-      state.routingReason = "manual model selection takes precedence; run /fusion-mode active to resume automatic routing";
+      state.routingReason = "manual model selection takes precedence; run /fission-mode active to resume automatic routing";
       await recordRouting(ctx, previousModel);
       updateFooter(state, ctx);
       return;
@@ -580,55 +580,55 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     await restoreRoute(ctx);
   });
 
-  pi.registerCommand("fusion", {
-    description: "Show Pi Fusion routing status",
+  pi.registerCommand("fission", {
+    description: "Show Pi Fission routing status",
     handler: async (_args, ctx) => report(ctx, formatStatus(asView(state)), state.routingStatus === "restore-failed" ? "warning" : "info"),
   });
-  pi.registerCommand("fusion-status", {
-    description: "Show Pi Fusion routing status",
+  pi.registerCommand("fission-status", {
+    description: "Show Pi Fission routing status",
     handler: async (_args, ctx) => report(ctx, formatStatus(asView(state)), state.routingStatus === "restore-failed" ? "warning" : "info"),
   });
-  pi.registerCommand("fusion-config", {
+  pi.registerCommand("fission-config", {
     description: "Show the seven semantic profile mappings",
     handler: async (_args, ctx) => report(ctx, formatConfig(asView(state))),
   });
-  pi.registerCommand("fusion-explain", {
+  pi.registerCommand("fission-explain", {
     description: "Explain the latest automatic route",
     handler: async (_args, ctx) => report(ctx, formatExplain(asView(state))),
   });
-  pi.registerCommand("fusion-routing", {
+  pi.registerCommand("fission-routing", {
     description: "Show current models and why each session switched (main agent and subagents)",
     handler: async (_args, ctx) => report(ctx, formatRoutingLog(await readRoutingEntries(configPath))),
   });
-  pi.registerCommand("fusion-agents", {
-    description: "Show a summary of every active Fusion agent and the model it is using",
+  pi.registerCommand("fission-agents", {
+    description: "Show a summary of every active Fission agent and the model it is using",
     handler: async (_args, ctx) => report(ctx, formatAgents(sessionSummaries(await readRoutingEntries(configPath), Date.now()), state.sessionId)),
   });
-  pi.registerCommand("fusion-setup-status", {
+  pi.registerCommand("fission-setup-status", {
     description: "Show seven-profile setup and probe status",
     handler: async (_args, ctx) => report(ctx, formatSetup(asView(state))),
   });
-  pi.registerCommand("fusion-mode", {
+  pi.registerCommand("fission-mode", {
     description: "Show or set automatic routing mode (off, shadow, active)",
     handler: async (args, ctx) => {
       if (state.config.status !== "ready") {
-        report(ctx, "fusion mode: setup required · run /fusion-setup", "warning");
+        report(ctx, "fission mode: setup required · run /fission-setup", "warning");
         return;
       }
       const requested = words(args)[0];
       if (!requested) {
-        report(ctx, `fusion mode: ${state.config.config.mode}`);
+        report(ctx, `fission mode: ${state.config.config.mode}`);
         return;
       }
       if (requested !== "off" && requested !== "shadow" && requested !== "active") {
-        report(ctx, "fusion mode: must be off, shadow, or active", "warning");
+        report(ctx, "fission mode: must be off, shadow, or active", "warning");
         return;
       }
       if (requested === "active" && (!state.setup || !isActiveReady({ ...state.config.config, mode: "active" }, state.setup))) {
-        report(ctx, "fusion mode: active blocked · run /fusion-setup", "warning");
+        report(ctx, "fission mode: active blocked · run /fission-setup", "warning");
         return;
       }
-      const updated = { ...state.config.config, mode: requested } as FusionConfig;
+      const updated = { ...state.config.config, mode: requested } as FissionConfig;
       await saveConfig(configPath, updated);
       state.config = { status: "ready", path: configPath, config: updated, diagnostics: [] };
       configResult = state.config;
@@ -636,19 +636,19 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       state.routingStatus = "idle";
       state.routingReason = null;
       updateFooter(state, ctx);
-      report(ctx, `fusion mode: ${requested}`);
+      report(ctx, `fission mode: ${requested}`);
     },
   });
-  pi.registerCommand("fusion-setup", {
+  pi.registerCommand("fission-setup", {
     description: "Configure, probe, and activate seven 9Router profile groups",
     handler: async (args, ctx) => {
       const parsed = setupMappings(args);
       if (parsed.error) {
-        report(ctx, `fusion setup: ${parsed.error}`, "warning");
+        report(ctx, `fission setup: ${parsed.error}`, "warning");
         return;
       }
       if (state.config.status === "invalid-config") {
-        report(ctx, `fusion setup: refusing to overwrite invalid config · ${state.config.diagnostics.join("; ")}`, "warning");
+        report(ctx, `fission setup: refusing to overwrite invalid config · ${state.config.diagnostics.join("; ")}`, "warning");
         return;
       }
       let config = state.config.status === "ready" ? state.config.config : createDefaultConfig();
@@ -662,7 +662,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         state.routingStatus = "setup-blocked";
         state.routingReason = discovery.diagnostic;
         updateFooter(state, ctx);
-        report(ctx, `fusion setup: 9Router unavailable · ${discovery.diagnostic}`, "warning");
+        report(ctx, `fission setup: 9Router unavailable · ${discovery.diagnostic}`, "warning");
         return;
       }
       const blocked = diagnoseSetup(config, discovery.models).filter((diagnostic) => !diagnostic.ok);
@@ -670,7 +670,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         state.routingStatus = "setup-blocked";
         state.routingReason = blocked.map((item) => `${item.profile}: ${item.issues.join(", ")}`).join(" · ");
         updateFooter(state, ctx);
-        report(ctx, `fusion setup: mapping blocked · ${state.routingReason}`, "warning");
+        report(ctx, `fission setup: mapping blocked · ${state.routingReason}`, "warning");
         return;
       }
       const result = await probeAll(config, { fetch: options.fetch, env: environment });
@@ -687,7 +687,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         state.routingStatus = "setup-blocked";
         state.routingReason = result.failures.join(", ");
         updateFooter(state, ctx);
-        report(ctx, `fusion setup: blocked · failed profiles ${result.failures.join(", ")}`, "warning");
+        report(ctx, `fission setup: blocked · failed profiles ${result.failures.join(", ")}`, "warning");
         return;
       }
       config = { ...config, mode: "active" };
@@ -699,19 +699,19 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       state.routingStatus = "idle";
       state.routingReason = null;
       updateFooter(state, ctx);
-      report(ctx, "fusion setup: complete · 7/7 profiles passed · automatic routing active");
+      report(ctx, "fission setup: complete · 7/7 profiles passed · automatic routing active");
     },
   });
   if (typeof pi.registerShortcut === "function") {
     pi.registerShortcut(Key.ctrlAlt("f"), {
-      description: "Toggle the live Pi Fusion agents widget",
+      description: "Toggle the live Pi Fission agents widget",
       handler: (ctx) => toggleWidget(ctx),
     });
   }
 }
 
-export default function piFusion(pi: ExtensionAPI): void {
-  void createFusionExtension(pi).catch((error) => {
-    process.stderr.write(`[pi-fusion] initialization failed: ${error instanceof Error ? error.message : "unknown error"}\n`);
+export default function piFission(pi: ExtensionAPI): void {
+  void createFissionExtension(pi).catch((error) => {
+    process.stderr.write(`[pi-fission] initialization failed: ${error instanceof Error ? error.message : "unknown error"}\n`);
   });
 }

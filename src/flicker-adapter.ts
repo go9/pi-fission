@@ -37,13 +37,15 @@ export interface TicketCreation {
 }
 
 /** Recover a ticket created before a local crash by its durable workflow marker. */
-export async function findPlanningTicket(workflowId: string, options: { env?: NodeJS.ProcessEnv } = {}): Promise<TicketCreation> {
+export async function findPlanningTicket(repo: string, workflowId: string, options: { env?: NodeJS.ProcessEnv } = {}): Promise<TicketCreation> {
   try {
-    const { stdout } = await execFileAsync("flicker", ["ticket", "list", "--json"], { env: options.env ?? process.env, maxBuffer: 20_000_000 });
+    const { stdout } = await execFileAsync("flicker", ["ticket", "list", "--json"], { cwd: repo, env: options.env ?? process.env, maxBuffer: 20_000_000 });
     const parsed = JSON.parse(stdout);
     const tickets = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tickets) ? parsed.tickets : [];
     const marker = `Pi Fusion workflow: ${workflowId}`;
-    const match = tickets.find((ticket: unknown) => typeof (ticket as { body_md?: unknown })?.body_md === "string" && (ticket as { body_md: string }).body_md.includes(marker));
+    const matches = tickets.filter((ticket: unknown) => typeof (ticket as { body_md?: unknown })?.body_md === "string" && (ticket as { body_md: string }).body_md.includes(marker));
+    if (matches.length > 1) return { ok: false, ticketId: null, error: "Multiple Flicker tickets match the workflow marker" };
+    const match = matches[0];
     const id = typeof match?.id === "number" ? String(match.id) : typeof match?.id === "string" ? match.id : null;
     return { ok: true, ticketId: id };
   } catch (error) {

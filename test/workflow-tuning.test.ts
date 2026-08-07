@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mkdtemp, symlink } from "node:fs/promises";
+import { mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { classify } from "../src/classifier.ts";
@@ -206,6 +206,9 @@ describe("workflow planning and runtime", () => {
     const projecting = { ...a, status: "complete" as const, pendingProjection: { kind: "complete" as const, createdAt: "x" } };
     await upsertWorkflow(projecting, storePath);
     assert.equal((await activeWorkflowForRepo(aliasA, "a", storePath))?.pendingProjection?.kind, "complete", "terminal local state remains recoverable while a Flicker outbox item is pending");
+
+    await writeFile(storePath, "{truncated", "utf8");
+    await assert.rejects(loadWorkflows(storePath), /JSON|malformed/, "a truncated store fails closed instead of erasing workflow truth");
   });
 
   it("session store persists workflows and warns on foreign ownership", async () => {

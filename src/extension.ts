@@ -166,7 +166,8 @@ function allowedShellCommand(command: string): AllowedShellKind | null {
   }
   if (executable === "npm" || executable === "pnpm") {
     if (verb === "test" && words.length === 1) return "verification";
-    if (verb === "run" && words.length === 2 && /^(?:test|check|typecheck)(?::[A-Za-z0-9_.-]+)?$/.test(words[1] ?? "")) return "verification";
+    if (verb === "run" && words.length === 2 && /^test(?::[A-Za-z0-9_.-]+)?$/.test(words[1] ?? "")) return "verification";
+    if (verb === "run" && words.length === 2 && /^(?:check|typecheck)(?::[A-Za-z0-9_.-]+)?$/.test(words[1] ?? "")) return "local";
     if (allowVerb(["pack", "audit"]) && words.length === 1) return "local";
     return null;
   }
@@ -175,9 +176,9 @@ function allowedShellCommand(command: string): AllowedShellKind | null {
     if (allowVerb(["compile", "format"]) && words.length === 1) return "local";
     return null;
   }
-  if (executable === "cargo") return allowVerb(["test", "check"]) && words.length === 1 ? "verification" : allowVerb(["build", "fmt", "clippy"]) && words.length === 1 ? "local" : null;
+  if (executable === "cargo") return verb === "test" && words.length === 1 ? "verification" : allowVerb(["check", "build", "fmt", "clippy"]) && words.length === 1 ? "local" : null;
   if (executable === "go") return verb === "test" && words.length === 2 && words[1] === "./..." ? "verification" : allowVerb(["build", "fmt", "vet"]) && words.length === 1 ? "local" : null;
-  if (executable === "make") return words.length > 0 && words.every((item) => /^(?:test|check|typecheck)$/.test(item)) ? "verification" : null;
+  if (executable === "make") return words.length > 0 && words.every((item) => /^test$/.test(item)) ? "verification" : words.length > 0 && words.every((item) => /^(?:check|typecheck)$/.test(item)) ? "local" : null;
   if (["grep", "test", "diff", "cmp", "wc"].includes(executable)) return "local";
   if (["pwd", "ls", "cat", "head", "tail", "sort", "uniq"].includes(executable)) return "local";
   if (executable === "find" && !words.some((item) => ["-delete", "-exec", "-execdir", "-ok", "-okdir"].includes(item))) return "local";
@@ -236,7 +237,7 @@ async function gitStatus(repo: string): Promise<string | null> {
   try { return (await execFileAsync("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: repo })).stdout; } catch { return null; }
 }
 
-async function commitChangedFiles(repo: string, previousHead: string | null, previousStatus: string | null): Promise<boolean> {
+export async function commitChangedFiles(repo: string, previousHead: string | null, previousStatus: string | null): Promise<boolean> {
   try {
     const current = await gitHead(repo);
     if (!current || !previousHead || current === previousHead) return false;
@@ -725,8 +726,16 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
 
   const attachFlickerTicket = async (candidate: WorkflowState): Promise<WorkflowState> => {
     if (candidate.adapter !== "flicker" || candidate.flickerTicketId) return candidate;
-    const found = await findPlanningTicket(candidate.id, { env: environment });
-    const ticket = found.ok && found.ticketId
+    const found = await findPlanningTicket(candidate.repo, candidate.id, { env: environment });
+    if (!found.ok) {
+      const first = candidate.nodes[0];
+      return {
+        ...candidate,
+        status: "blocked",
+        nodes: first ? candidate.nodes.map((node) => node.id === first.id ? { ...node, status: "failed" as const, error: found.error ?? "Flicker ticket lookup failed" } : node) : candidate.nodes,
+      };
+    }
+    const ticket = found.ticketId
       ? found
       : await createPlanningTicket(
           candidate.repo,
@@ -759,6 +768,12 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   const projectPendingFlicker = async (candidate: WorkflowState): Promise<{ workflow: WorkflowState; ok: boolean; error?: string }> => {
     const pending = candidate.pendingProjection;
     if (!pending) return { workflow: candidate, ok: true };
+    if (pending.kind === "cancel" && !candidate.flickerTicketId) {
+      const found = await findPlanningTicket(candidate.repo, candidate.id, { env: environment });
+      if (!found.ok) return { workflow: { ...candidate, status: "blocked" }, ok: false, error: found.error };
+      if (!found.ticketId) return { workflow: { ...candidate, status: "cancelled", pendingProjection: null, updatedAt: new Date().toISOString() }, ok: true };
+      candidate = { ...candidate, flickerTicketId: found.ticketId };
+    }
     let attached = await attachFlickerTicket(candidate);
     if (!attached.flickerTicketId) return { workflow: { ...attached, status: "blocked" }, ok: false, error: "Flicker ticket unavailable" };
     let result: { ok: boolean; error?: string };
@@ -1164,6 +1179,10 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     if (state.config.status === "ready" && state.config.config.mode === "active" && workflow && workflow.status === "running") {
       const node = runningNode(workflow);
       if (node) {
+        if (node.kind === "implement" && !await commitChangedFiles(workflow.envelope?.worktree ?? workflow.repo, nodeStartHead, nodeStartStatus)) {
+          turnEvidence.delete("git:commit:changed-files");
+          workflow = { ...workflow, nodes: workflow.nodes.map((item) => item.id === node.id ? { ...item, evidence: item.evidence.filter((entry) => entry !== "git:commit:changed-files") } : item) };
+        }
         if (turnEvidence.size > 0) {
           workflow = {
             ...workflow,

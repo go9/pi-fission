@@ -1,4 +1,5 @@
-import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type {
@@ -259,7 +260,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-const heldStoreLocks = new Set<string>();
+const storeLockContext = new AsyncLocalStorage<Set<string>>();
 
 export async function canonicalRepository(repo: string): Promise<string> {
   try { return await realpath(repo); } catch { return resolve(repo); }
@@ -272,7 +273,8 @@ function processAlive(pid: number): boolean {
 /** Serialize every read-modify-write against the shared workflow store. */
 export async function withRepoWorkflowLock<T>(_repo: string, path: string, operation: () => Promise<T>): Promise<T> {
   const key = resolve(path);
-  if (heldStoreLocks.has(key)) return operation();
+  const inherited = storeLockContext.getStore();
+  if (inherited?.has(key)) return operation();
   const parent = join(dirname(path), ".pi-fusion-locks");
   const lock = join(parent, createHash("sha256").update(key).digest("hex").slice(0, 24));
   const ownerPath = join(lock, "owner.json");
@@ -281,9 +283,9 @@ export async function withRepoWorkflowLock<T>(_repo: string, path: string, opera
     try {
       await mkdir(lock);
       await writeFile(ownerPath, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
-      heldStoreLocks.add(key);
-      try { return await operation(); } finally {
-        heldStoreLocks.delete(key);
+      const held = new Set(inherited ?? []);
+      held.add(key);
+      try { return await storeLockContext.run(held, operation); } finally {
         await rm(lock, { recursive: true, force: true });
       }
     } catch (error) {
@@ -310,19 +312,23 @@ export function workflowStorePath(configPath = defaultConfigPath()): string {
 }
 
 export async function loadWorkflows(path = workflowStorePath()): Promise<WorkflowState[]> {
+  let text: string;
   try {
-    const text = await readFile(path, "utf8");
-    const raw: unknown = JSON.parse(text);
-    if (Array.isArray(raw)) return raw.filter(isRecord) as unknown as WorkflowState[];
-  } catch {
-    // Missing or malformed store is treated as empty.
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
   }
-  return [];
+  const raw: unknown = JSON.parse(text);
+  if (!Array.isArray(raw) || !raw.every(isRecord)) throw new Error("Pi Fusion workflow store is malformed");
+  return raw as unknown as WorkflowState[];
 }
 
 export async function saveWorkflows(workflows: WorkflowState[], path = workflowStorePath()): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(workflows, null, 2)}\n`, "utf8");
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(workflows, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  try { await rename(temporary, path); } catch (error) { await rm(temporary, { force: true }); throw error; }
 }
 
 export async function upsertWorkflow(workflow: WorkflowState, path = workflowStorePath()): Promise<void> {

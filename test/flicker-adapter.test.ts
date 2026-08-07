@@ -33,7 +33,7 @@ describe("Flicker adapter lifecycle", () => {
 
   it("finds an orphaned planning ticket by durable workflow marker", async () => {
     const fake = await fakeFlicker();
-    assert.deepEqual(await findPlanningTicket("wf-1", { env: fake.env }), { ok: true, ticketId: "1501" });
+    assert.deepEqual(await findPlanningTicket(fake.dir, "wf-1", { env: fake.env }), { ok: true, ticketId: "1501" });
     assert.deepEqual(await readFlickerTicketStatus("1501", { env: fake.env }), { ok: true, status: "backlog" });
   });
 

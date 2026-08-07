@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { classify } from "../src/classifier.ts";
@@ -180,18 +180,32 @@ describe("workflow planning and runtime", () => {
     assert.ok(workflow.nodes.every((node) => node.status !== "running"));
   });
 
-  it("serializes cross-process-style repository ownership checks", async () => {
+  it("serializes the shared store across repositories and canonical aliases", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-fusion-lock-"));
     const storePath = join(dir, "workflows.json");
+    const repoA = await mkdtemp(join(tmpdir(), "pi-fusion-repo-a-"));
+    const repoB = await mkdtemp(join(tmpdir(), "pi-fusion-repo-b-"));
+    const aliasA = `${repoA}-alias`;
+    await symlink(repoA, aliasA);
     let active = 0;
     let maxActive = 0;
-    await Promise.all(Array.from({ length: 4 }, () => withRepoWorkflowLock("/repo", storePath, async () => {
+    await Promise.all(Array.from({ length: 4 }, (_, index) => withRepoWorkflowLock(index % 2 ? repoA : repoB, storePath, async () => {
       active += 1;
       maxActive = Math.max(maxActive, active);
       await new Promise((resolve) => setTimeout(resolve, 10));
       active -= 1;
     })));
     assert.equal(maxActive, 1);
+
+    const classification = classify({ text: "Implement a helper" });
+    const a = createWorkflowState({ repo: repoA, adapter: "session", flickerTicketId: null, classification, mode: "active", ownerSession: "a", ownerPid: 1 });
+    const b = createWorkflowState({ repo: repoB, adapter: "session", flickerTicketId: null, classification, mode: "active", ownerSession: "b", ownerPid: 2 });
+    await Promise.all([upsertWorkflow(a, storePath), upsertWorkflow(b, storePath)]);
+    assert.equal((await loadWorkflows(storePath)).length, 2, "concurrent cross-repository upserts cannot lose data");
+    assert.equal((await activeWorkflowForRepo(aliasA, "a", storePath))?.id, a.id, "symlink aliases resolve to the same repository owner");
+    const projecting = { ...a, status: "complete" as const, pendingProjection: { kind: "complete" as const, createdAt: "x" } };
+    await upsertWorkflow(projecting, storePath);
+    assert.equal((await activeWorkflowForRepo(aliasA, "a", storePath))?.pendingProjection?.kind, "complete", "terminal local state remains recoverable while a Flicker outbox item is pending");
   });
 
   it("session store persists workflows and warns on foreign ownership", async () => {

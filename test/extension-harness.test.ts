@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
@@ -846,6 +847,14 @@ describe("active workflow advancement on settlement", () => {
     await writeFile(join(dir, "pi-fusion.setup.json"), JSON.stringify(setup), "utf8");
     const runtime = fakeApi();
     const projectDir = await mkdtemp(join(tmpdir(), "pi-fusion-gate-"));
+    execFileSync("git", ["init", "-q"], { cwd: projectDir });
+    execFileSync("git", ["config", "user.email", "fusion-test@example.invalid"], { cwd: projectDir });
+    execFileSync("git", ["config", "user.name", "Fusion Test"], { cwd: projectDir });
+    await writeFile(join(projectDir, "README.md"), "baseline\n", "utf8");
+    const sandboxEscape = join(process.env.HOME!, `.pi-fusion-sandbox-${process.pid}`);
+    await writeFile(join(projectDir, "package.json"), JSON.stringify({ scripts: { test: `node -e \"require('fs').writeFileSync('${sandboxEscape}','x')\"` } }), "utf8");
+    execFileSync("git", ["add", "README.md", "package.json"], { cwd: projectDir });
+    execFileSync("git", ["commit", "-qm", "baseline"], { cwd: projectDir });
     const context = fakeContext(projectDir, [], "tui", { id: "existing", provider: "existing" }, []);
     try {
       await createFusionExtension(runtime.api, { configPath, env: { TEST_9ROUTER_KEY: "test" }, stderr: () => undefined });
@@ -869,7 +878,14 @@ describe("active workflow advancement on settlement", () => {
       await emit(runtime.handlers, context, "before_agent_start", { prompt: "Implement the approved helper", images: [] });
 
       assert.deepEqual(await emitResults(runtime.handlers, context, "tool_call", { toolName: "write", toolCallId: "w2", input: { path: "x", content: "x" } }), [undefined]);
-      assert.deepEqual(await emitResults(runtime.handlers, context, "tool_call", { toolName: "bash", toolCallId: "b1", input: { command: "npm test" } }), [undefined]);
+      const testCall = { toolName: "bash", toolCallId: "b1", input: { command: "npm test" } };
+      assert.deepEqual(await emitResults(runtime.handlers, context, "tool_call", testCall), [undefined]);
+      assert.match(testCall.input.command, /^\/usr\/bin\/sandbox-exec /, "approved shell commands are sandboxed before execution");
+      assert.throws(() => execFileSync("/bin/sh", ["-lc", testCall.input.command], { cwd: projectDir, stdio: "ignore" }), "sandbox blocks package scripts from writing outside the worktree/temp area");
+      await assert.rejects(readFile(sandboxEscape), "outside sandbox target was not created");
+      const commitCall = { toolName: "bash", toolCallId: "commit", input: { command: "git commit -m 'implementation'" } };
+      assert.deepEqual(await emitResults(runtime.handlers, context, "tool_call", commitCall), [undefined]);
+      assert.match(commitCall.input.command, /^\/usr\/bin\/sandbox-exec /);
       for (const command of [
         "git push origin HEAD", "git -C . push origin HEAD", "gh --repo x/y pr merge 1",
         "flicker --environment main deploy", "terraform -chdir=infra destroy",
@@ -885,8 +901,24 @@ describe("active workflow advancement on settlement", () => {
       await symlink(outsideDir, join(projectDir, "escape"));
       const symlinkEscape = await emitResults(runtime.handlers, context, "tool_call", { toolName: "write", toolCallId: "symlink", input: { path: "escape/pwned", content: "x" } });
       assert.match(String((symlinkEscape[0] as any).reason), /outside the approved worktree/);
+      await symlink(join(outsideDir, "future"), join(projectDir, "dangling"));
+      const danglingEscape = await emitResults(runtime.handlers, context, "tool_call", { toolName: "write", toolCallId: "dangling", input: { path: "dangling", content: "x" } });
+      assert.match(String((danglingEscape[0] as any).reason), /outside the approved worktree/);
       const child = await emitResults(runtime.handlers, context, "tool_call", { toolName: "subagent", toolCallId: "s", input: {} });
       assert.match(String((child[0] as any).reason), /outside the approved writer tool set/);
+      await rm(join(projectDir, "escape"));
+      await rm(join(projectDir, "dangling"));
+
+      await writeFile(join(projectDir, "x"), "x\n", "utf8");
+      await emit(runtime.handlers, context, "tool_result", { toolName: "write", toolCallId: "w2", input: { path: "x", content: "x" }, content: [], details: {}, isError: false, usage: {} });
+      execFileSync("git", ["add", "x"], { cwd: projectDir });
+      execFileSync("git", ["commit", "-qm", "implementation"], { cwd: projectDir });
+      await emit(runtime.handlers, context, "tool_result", { toolName: "bash", toolCallId: "commit", input: { command: "git commit -m 'implementation'" }, content: [], details: {}, isError: false, usage: {} });
+      await emit(runtime.handlers, context, "agent_settled", {});
+      const stored = JSON.parse(await readFile(join(dir, "pi-fusion.workflows.json"), "utf8"));
+      const implemented = stored[0].nodes.find((node: any) => node.kind === "implement");
+      assert.equal(implemented.status, "passed");
+      assert.deepEqual(implemented.evidence.sort(), ["git:commit:changed-files", "mutation:write:in-worktree"]);
     } finally {
       await mock.close();
     }

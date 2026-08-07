@@ -1,8 +1,9 @@
 import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import {
   defaultConfigPath,
@@ -36,10 +37,11 @@ import {
   type AggregateUsage,
 } from "./telemetry.ts";
 import { diagnoseSetup, isActiveReady, loadSetupState, probeAll, saveSetupState, type SetupDiagnostic } from "./setup.ts";
-import { resolveFlickerProject, createPlanningTicket, syncFlickerStatus, writeFlickerDocument } from "./flicker-adapter.ts";
+import { resolveFlickerProject, createPlanningTicket, findPlanningTicket, readFlickerTicketStatus, syncFlickerStatus, writeFlickerDocument } from "./flicker-adapter.ts";
 import {
   activeWorkflowForRepo,
   advanceWorkflow,
+  canonicalRepository,
   approveWorkflow,
   cancelWorkflow,
   createWorkflowState,
@@ -155,23 +157,26 @@ function allowedShellCommand(command: string): AllowedShellKind | null {
   const allowVerb = (verbs: string[]) => verbs.includes(verb);
 
   if (executable === "git") {
-    if (allowVerb(["status", "diff", "log", "show", "rev-parse"])) return "verification";
-    if (verb === "add") return "local";
-    if (verb === "commit") return "commit";
+    const args = words.slice(1);
+    if (args.some((item) => /^(?:--git-dir|--work-tree|--exec-path|--config-env|--ext-diff)/.test(item) || isAbsolute(item) || item === ".." || item.startsWith("../"))) return null;
+    if (allowVerb(["status", "diff", "log", "show", "rev-parse"])) return "local";
+    if (verb === "add" && args.length > 0 && args.every((item) => item === "." || (!item.startsWith("-") && !isAbsolute(item) && item !== ".." && !item.startsWith("../")))) return "local";
+    if (verb === "commit" && args.length === 2 && ["-m", "--message"].includes(args[0]!)) return "commit";
     return null;
   }
   if (executable === "npm" || executable === "pnpm") {
-    if (verb === "test" || (verb === "run" && /^(?:test|check|typecheck)(?::[A-Za-z0-9_.-]+)?$/.test(words[1] ?? ""))) return "verification";
-    if (allowVerb(["pack", "audit"])) return "local";
+    if (verb === "test" && words.length === 1) return "verification";
+    if (verb === "run" && words.length === 2 && /^(?:test|check|typecheck)(?::[A-Za-z0-9_.-]+)?$/.test(words[1] ?? "")) return "verification";
+    if (allowVerb(["pack", "audit"]) && words.length === 1) return "local";
     return null;
   }
   if (executable === "mix") {
-    if (verb === "test") return "verification";
-    if (allowVerb(["compile", "format"])) return "local";
+    if (verb === "test" && words.length === 1) return "verification";
+    if (allowVerb(["compile", "format"]) && words.length === 1) return "local";
     return null;
   }
-  if (executable === "cargo") return allowVerb(["test", "check"]) ? "verification" : allowVerb(["build", "fmt", "clippy"]) ? "local" : null;
-  if (executable === "go") return verb === "test" ? "verification" : allowVerb(["build", "fmt", "vet"]) ? "local" : null;
+  if (executable === "cargo") return allowVerb(["test", "check"]) && words.length === 1 ? "verification" : allowVerb(["build", "fmt", "clippy"]) && words.length === 1 ? "local" : null;
+  if (executable === "go") return verb === "test" && words.length === 2 && words[1] === "./..." ? "verification" : allowVerb(["build", "fmt", "vet"]) && words.length === 1 ? "local" : null;
   if (executable === "make") return words.length > 0 && words.every((item) => /^(?:test|check|typecheck)$/.test(item)) ? "verification" : null;
   if (["grep", "test", "diff", "cmp", "wc"].includes(executable)) return "local";
   if (["pwd", "ls", "cat", "head", "tail", "sort", "uniq"].includes(executable)) return "local";
@@ -192,6 +197,15 @@ function pathWithinWorktree(workflow: WorkflowState, path: string): boolean {
   if (lexical !== "" && (lexical.startsWith("..") || isAbsolute(lexical))) return false;
   try {
     const canonicalRoot = realpathSync(root);
+    let cursor = root;
+    for (const segment of lexical.split(/[\\/]/).filter(Boolean)) {
+      cursor = join(cursor, segment);
+      try {
+        if (lstatSync(cursor).isSymbolicLink()) return false;
+      } catch {
+        break;
+      }
+    }
     let existing = target;
     while (!existsSync(existing) && dirname(existing) !== existing) existing = dirname(existing);
     const canonicalExisting = realpathSync(existing);
@@ -202,16 +216,33 @@ function pathWithinWorktree(workflow: WorkflowState, path: string): boolean {
   }
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function sandboxedShellCommand(workflow: WorkflowState, command: string): string | null {
+  if (!existsSync("/usr/bin/sandbox-exec")) return null;
+  const root = realpathSync(workflow.envelope?.worktree ?? workflow.repo);
+  const temp = realpathSync(tmpdir());
+  const profile = `(version 1)\n(deny default)\n(allow process*)\n(allow file-read*)\n(allow sysctl-read)\n(allow mach-lookup)\n(allow signal)\n(allow ipc-posix-shm)\n(allow network-bind)\n(allow network-inbound)\n(allow network-outbound (remote ip "localhost:*"))\n(allow file-write* (subpath ${JSON.stringify(root)}) (subpath ${JSON.stringify(temp)}) (literal "/dev/null"))`;
+  return `/usr/bin/sandbox-exec -p ${shellQuote(profile)} /bin/sh -lc ${shellQuote(command)}`;
+}
+
 async function gitHead(repo: string): Promise<string | null> {
   try { return (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo })).stdout.trim() || null; } catch { return null; }
 }
 
-async function commitChangedFiles(repo: string, previousHead: string | null): Promise<boolean> {
+async function gitStatus(repo: string): Promise<string | null> {
+  try { return (await execFileAsync("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: repo })).stdout; } catch { return null; }
+}
+
+async function commitChangedFiles(repo: string, previousHead: string | null, previousStatus: string | null): Promise<boolean> {
   try {
     const current = await gitHead(repo);
-    if (!current || current === previousHead) return false;
-    const { stdout } = await execFileAsync("git", ["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", current], { cwd: repo });
-    return stdout.trim().length > 0;
+    if (!current || !previousHead || current === previousHead) return false;
+    const { stdout } = await execFileAsync("git", ["diff", "--name-only", `${previousHead}..${current}`], { cwd: repo });
+    if (stdout.trim().length === 0) return false;
+    return previousStatus !== null && await gitStatus(repo) === previousStatus;
   } catch {
     return false;
   }
@@ -239,6 +270,7 @@ function toolBlockReason(options: {
   if (!managedMutation || READ_ONLY_TOOLS.has(options.toolName)) return null;
   if (!options.ready) return "Pi Fusion active setup is not ready; mutating tools are blocked";
   if (!options.workflow) return "Pi Fusion has no approved workflow; mutating tools are blocked";
+  if (options.workflow.pendingProjection) return `Flicker ${options.workflow.pendingProjection.kind} projection is pending; mutating tools are blocked`;
   if (options.workflow.status === "awaiting-approval") return "Approve the Pi Fusion plan before repository mutation";
   if (options.workflow.status !== "running") return `Pi Fusion workflow is ${options.workflow.status}; mutating tools are blocked`;
 
@@ -473,6 +505,8 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   /** Allow-listed, content-free tool evidence collected for the current node turn. */
   let turnEvidence = new Set<string>();
   let nodeStartHead: string | null = null;
+  let nodeStartStatus: string | null = null;
+  const shellCommands = new Map<string, string>();
 
   const setActiveModel = (identity: ModelIdentity | null): void => {
     state.activeModel = displayModel(identity);
@@ -689,6 +723,60 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     updateFooter(state, ctx);
   };
 
+  const attachFlickerTicket = async (candidate: WorkflowState): Promise<WorkflowState> => {
+    if (candidate.adapter !== "flicker" || candidate.flickerTicketId) return candidate;
+    const found = await findPlanningTicket(candidate.id, { env: environment });
+    const ticket = found.ok && found.ticketId
+      ? found
+      : await createPlanningTicket(
+          candidate.repo,
+          "Pi Fusion managed workflow",
+          `Pi Fusion workflow: ${candidate.id}\n\nManaged by Pi Fusion for ${candidate.repo}. Planning documents and evidence are projected into Flicker.`,
+          { env: environment },
+        );
+    if (ticket.ok && ticket.ticketId) {
+      return {
+        ...candidate,
+        flickerTicketId: ticket.ticketId,
+        status: candidate.envelope ? candidate.status : "awaiting-approval",
+        nodes: candidate.nodes.map((node) => node.status === "failed" && node.error?.includes("Flicker ticket creation")
+          ? { ...node, status: "pending" as const, finishedAt: null, error: undefined }
+          : node),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    const first = candidate.nodes[0];
+    return {
+      ...candidate,
+      status: "blocked",
+      nodes: first
+        ? candidate.nodes.map((node) => node.id === first.id ? { ...node, status: "failed", finishedAt: new Date().toISOString(), error: ticket.error ?? "Flicker ticket creation failed" } : node)
+        : candidate.nodes,
+      updatedAt: new Date().toISOString(),
+    };
+  };
+
+  const projectPendingFlicker = async (candidate: WorkflowState): Promise<{ workflow: WorkflowState; ok: boolean; error?: string }> => {
+    const pending = candidate.pendingProjection;
+    if (!pending) return { workflow: candidate, ok: true };
+    let attached = await attachFlickerTicket(candidate);
+    if (!attached.flickerTicketId) return { workflow: { ...attached, status: "blocked" }, ok: false, error: "Flicker ticket unavailable" };
+    let result: { ok: boolean; error?: string };
+    if (pending.kind === "approve") {
+      const written = await writeFlickerDocument(attached.flickerTicketId, "task_contract", "Pi Fusion task contract", flickerTaskContractBody(attached), { env: environment });
+      result = written.ok ? await syncFlickerStatus(attached.flickerTicketId, "running", { env: environment }) : written;
+    } else if (pending.kind === "complete") {
+      const written = await writeFlickerDocument(attached.flickerTicketId, "implementation_notes", "Pi Fusion implementation evidence", flickerImplementationNotesBody(attached), { env: environment });
+      result = written.ok ? await syncFlickerStatus(attached.flickerTicketId, "complete", { env: environment }) : written;
+    } else {
+      result = await syncFlickerStatus(attached.flickerTicketId, "cancelled", { env: environment });
+    }
+    if (!result.ok) return { workflow: { ...attached, status: "blocked" }, ok: false, error: result.error };
+    const status: WorkflowState["status"] = pending.kind === "approve" ? "running" : pending.kind === "complete" ? "complete" : "cancelled";
+    attached = { ...attached, status, pendingProjection: null, updatedAt: new Date().toISOString() };
+    return { workflow: attached, ok: true };
+  };
+
   /** Full-product: create a managed workflow for a coding question (or none for read-only). */
   const ensureWorkflow = async (ctx: ExtensionContext): Promise<void> => {
     if (state.config.status !== "ready" || !state.classification) return;
@@ -696,7 +784,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       // A read-only continuation must not discard an already approved workflow.
       // It can advance the current read-only node while preserving the same
       // session ownership and approval envelope.
-      if (workflow && (workflow.status === "running" || workflow.status === "awaiting-approval" || workflow.status === "paused" || workflow.status === "blocked" || workflow.status === "recovered")) {
+      if (workflow && (workflow.status === "planning" || workflow.status === "running" || workflow.status === "awaiting-approval" || workflow.status === "paused" || workflow.status === "blocked" || workflow.status === "recovered")) {
         state.workflow = workflow;
         return;
       }
@@ -704,8 +792,8 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       state.workflow = null;
       return;
     }
-    if (workflow && (workflow.status === "running" || workflow.status === "awaiting-approval" || workflow.status === "paused" || workflow.status === "blocked" || workflow.status === "recovered")) return;
-    const repo = ctx.cwd;
+    if (workflow && (workflow.status === "planning" || workflow.status === "running" || workflow.status === "awaiting-approval" || workflow.status === "paused" || workflow.status === "blocked" || workflow.status === "recovered")) return;
+    const repo = await canonicalRepository(ctx.cwd);
     await withRepoWorkflowLock(repo, storePath, async () => {
       const foreign = await foreignOwnerForRepo(repo, getSessionId(ctx), storePath);
       state.foreignOwner = foreign !== null;
@@ -716,52 +804,49 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       }
       const existing = await activeWorkflowForRepo(repo, getSessionId(ctx), storePath);
       if (existing) {
-        workflow = existing;
-        state.workflow = existing;
+        workflow = await attachFlickerTicket(existing);
+        state.workflow = workflow;
+        await upsertWorkflow(workflow, storePath);
         return;
       }
-      // Flicker adapter selection: when the repository resolves a Flicker project,
-      // the workflow is projected into Flicker truth (planning ticket + docs are
-      // the plan itself and are permitted before mutation approval).
+      // Persist the workflow identity before any remote ticket creation. The
+      // workflow id is the idempotency marker used to recover an orphaned ticket.
       let adapter: "session" | "flicker" = "session";
-      let flickerTicketId: string | null = null;
-      let flickerCreationError: string | null = null;
+      let flickerResolutionError: string | null = null;
       try {
         const resolution = await resolveFlickerProject(repo, { env: environment });
-        if (resolution.ok && resolution.projectSlug) {
+        if (resolution.ok && resolution.projectSlug) adapter = "flicker";
+        else if (existsSync(join(repo, "flicker.toml"))) {
           adapter = "flicker";
-          const ticket = await createPlanningTicket(
-            repo,
-            "Pi Fusion managed workflow",
-            `Managed by Pi Fusion for ${repo}. Planning documents and evidence are projected into Flicker.`,
-            { env: environment },
-          );
-          flickerTicketId = ticket.ok ? ticket.ticketId : null;
-          if (!ticket.ok || !ticket.ticketId) flickerCreationError = ticket.error ?? "Flicker ticket creation failed";
+          flickerResolutionError = resolution.error ?? "Flicker project resolution failed";
         }
-      } catch {
-        // Flicker unavailable is non-fatal; the workflow stays session-adapter.
+      } catch (error) {
+        if (existsSync(join(repo, "flicker.toml"))) {
+          adapter = "flicker";
+          flickerResolutionError = (error as Error).message;
+        }
       }
       workflow = createWorkflowState({
         repo,
         adapter,
-        flickerTicketId,
+        flickerTicketId: null,
         classification: state.classification!,
         mode: state.config.status === "ready" ? state.config.config.mode : "off",
         ownerSession: getSessionId(ctx),
         ownerPid: process.pid,
       });
-      if (flickerCreationError) {
+      if (adapter === "flicker") workflow = { ...workflow, status: "planning" };
+      if (flickerResolutionError) {
         const first = workflow.nodes[0];
         workflow = {
           ...workflow,
           status: "blocked",
-          nodes: first
-            ? workflow.nodes.map((node) => node.id === first.id ? { ...node, status: "failed", finishedAt: new Date().toISOString(), error: flickerCreationError } : node)
-            : workflow.nodes,
-          updatedAt: new Date().toISOString(),
+          nodes: first ? workflow.nodes.map((node) => node.id === first.id ? { ...node, status: "failed" as const, error: `Flicker project resolution failed: ${flickerResolutionError}` } : node) : workflow.nodes,
         };
       }
+      state.workflow = workflow;
+      await upsertWorkflow(workflow, storePath);
+      if (!flickerResolutionError) workflow = await attachFlickerTicket(workflow);
       state.workflow = workflow;
       await upsertWorkflow(workflow, storePath);
     });
@@ -779,9 +864,37 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   pi.on("session_start", async (_event, ctx) => {
     setActiveModel(modelIdentity(ctx));
     const ownerSession = getSessionId(ctx);
-    workflow = await activeWorkflowForRepo(ctx.cwd, ownerSession, storePath);
-    state.workflow = workflow;
-    state.foreignOwner = (await foreignOwnerForRepo(ctx.cwd, ownerSession, storePath)) !== null;
+    const repo = await canonicalRepository(ctx.cwd);
+    await withRepoWorkflowLock(repo, storePath, async () => {
+      workflow = await activeWorkflowForRepo(repo, ownerSession, storePath);
+      state.foreignOwner = (await foreignOwnerForRepo(repo, ownerSession, storePath)) !== null;
+      if (workflow?.adapter === "flicker") {
+        workflow = await attachFlickerTicket(workflow);
+        if (workflow.pendingProjection) {
+          const projected = await projectPendingFlicker(workflow);
+          workflow = projected.workflow;
+        }
+        if (workflow.flickerTicketId && !workflow.pendingProjection) {
+          const remote = await readFlickerTicketStatus(workflow.flickerTicketId, { env: environment });
+          const drift = remote.ok && (
+            remote.status === "done"
+            || (workflow.status === "awaiting-approval" && remote.status !== "backlog")
+            || (["running", "paused", "blocked", "recovered"].includes(workflow.status) && remote.status !== "in_progress")
+          );
+          if (!remote.ok || drift) {
+            const node = runningNode(workflow) ?? workflow.nodes.find((item) => item.status === "pending");
+            workflow = {
+              ...workflow,
+              status: "blocked",
+              updatedAt: new Date().toISOString(),
+              nodes: node ? workflow.nodes.map((item) => item.id === node.id ? { ...item, status: "failed" as const, error: `Flicker reconciliation required: ${remote.error ?? `remote status ${remote.status}`}` } : item) : workflow.nodes,
+            };
+          }
+        }
+        await upsertWorkflow(workflow, storePath);
+      }
+      state.workflow = workflow;
+    });
     updateFooter(state, ctx);
   });
 
@@ -798,6 +911,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     state.outcome = "unknown";
     turnEvidence = new Set<string>();
     nodeStartHead = null;
+    nodeStartStatus = null;
     reroute();
 
     const config = state.config;
@@ -819,7 +933,9 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         return;
       }
       if (workflow?.status === "running" && runningNode(workflow)?.kind === "implement") {
-        nodeStartHead = await gitHead(workflow.envelope?.worktree ?? ctx.cwd);
+        const worktree = workflow.envelope?.worktree ?? ctx.cwd;
+        nodeStartHead = await gitHead(worktree);
+        nodeStartStatus = await gitStatus(worktree);
       }
     } else {
       workflow = null;
@@ -931,15 +1047,15 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       reroute();
     }
     state.usage = mergeUsage(state.usage, sanitizeUsage(event.usage));
+    const originalShell = event.toolName === "bash" ? shellCommands.get(event.toolCallId) : undefined;
+    if (event.toolName === "bash") shellCommands.delete(event.toolCallId);
+    const evidenceInput = originalShell === undefined ? event.input : { command: originalShell };
     if (event.isError) {
       state.outcome = "error";
     } else {
-      for (const evidence of evidenceForTool(workflow, event.toolName, event.input)) turnEvidence.add(evidence);
-      if (event.toolName === "bash" && workflow) {
-        const command = typeof event.input === "object" && event.input !== null && "command" in event.input
-          ? String((event.input as { command?: unknown }).command ?? "")
-          : "";
-        if (allowedShellCommand(command) === "commit" && await commitChangedFiles(workflow.envelope?.worktree ?? workflow.repo, nodeStartHead)) {
+      for (const evidence of evidenceForTool(workflow, event.toolName, evidenceInput)) turnEvidence.add(evidence);
+      if (event.toolName === "bash" && workflow && originalShell !== undefined) {
+        if (allowedShellCommand(originalShell) === "commit" && await commitChangedFiles(workflow.envelope?.worktree ?? workflow.repo, nodeStartHead, nodeStartStatus)) {
           turnEvidence.add("git:commit:changed-files");
         }
       }
@@ -1026,6 +1142,15 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       input: event.input,
     });
     if (reason) return { block: true, reason, terminate: true };
+    if (activeMode && workflow && event.toolName === "bash") {
+      const original = typeof event.input === "object" && event.input !== null && "command" in event.input
+        ? String((event.input as { command?: unknown }).command ?? "")
+        : "";
+      const sandboxed = sandboxedShellCommand(workflow, original);
+      if (!sandboxed) return { block: true, reason: "Local shell sandbox is unavailable", terminate: true };
+      shellCommands.set(event.toolCallId, original);
+      (event.input as { command: string }).command = sandboxed;
+    }
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
@@ -1047,30 +1172,18 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
               : item),
           };
         }
-        workflow = advanceWorkflow(workflow, node.id, settledOutcome === "error" ? "failed" : "passed", settledOutcome === "error" ? "provider/tool error" : undefined);
-        state.workflow = workflow;
-        await persistWorkflowState();
-      }
-      if ((workflow.status === "complete" || workflow.status === "blocked") && workflow.adapter === "flicker" && workflow.flickerTicketId) {
-        const written = workflow.status === "complete"
-          ? await writeFlickerDocument(workflow.flickerTicketId, "implementation_notes", "Pi Fusion implementation evidence", flickerImplementationNotesBody(workflow), { env: environment })
-          : { ok: true as const };
-        const sync = written.ok
-          ? await syncFlickerStatus(workflow.flickerTicketId, workflow.status, { env: environment })
-          : { ok: false, error: written.error };
-        if (!sync.ok) {
-          const failedAt = new Date().toISOString();
-          workflow = {
-            ...workflow,
-            status: "blocked",
-            updatedAt: failedAt,
-            nodes: node
-              ? workflow.nodes.map((item) => item.id === node.id ? { ...item, status: "failed" as const, finishedAt: failedAt, error: `Flicker projection failed: ${sync.error ?? "unknown error"}` } : item)
-              : workflow.nodes,
-          };
+        let advanced = advanceWorkflow(workflow, node.id, settledOutcome === "error" ? "failed" : "passed", settledOutcome === "error" ? "provider/tool error" : undefined);
+        if (advanced.status === "complete" && advanced.adapter === "flicker") {
+          advanced = { ...advanced, pendingProjection: { kind: "complete", createdAt: new Date().toISOString() } };
+          workflow = advanced;
           state.workflow = workflow;
           await persistWorkflowState();
+          const projected = await projectPendingFlicker(advanced);
+          advanced = projected.workflow;
         }
+        workflow = advanced;
+        state.workflow = workflow;
+        await persistWorkflowState();
       }
       await recordActiveOutcome(node, settledOutcome);
     }
@@ -1201,7 +1314,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         return;
       }
       const config = state.config.status === "ready" ? state.config.config : null;
-      workflow = approveWorkflow(workflow, {
+      const approved = approveWorkflow(workflow, {
         scope: workflow.nodes.map((node) => node.kind).join(" -> "),
         acceptance: ["contract-defined"],
         worktree: workflow.repo,
@@ -1214,21 +1327,18 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         maxSwitches: config?.tuning.maxSwitches ?? 4,
         budgetTokens: null,
       });
+      workflow = approved.adapter === "flicker"
+        ? { ...approved, pendingProjection: { kind: "approve", createdAt: new Date().toISOString() } }
+        : approved;
       state.workflow = workflow;
       await persistWorkflowState();
-      if (workflow.adapter === "flicker" && workflow.flickerTicketId) {
-        const written = await writeFlickerDocument(workflow.flickerTicketId, "task_contract", "Pi Fusion task contract", flickerTaskContractBody(workflow), { env: environment });
-        const sync = written.ok
-          ? await syncFlickerStatus(workflow.flickerTicketId, workflow.status, { env: environment })
-          : { ok: false, error: written.error };
-        if (!sync.ok) {
-          const node = runningNode(workflow);
-          workflow = node
-            ? advanceWorkflow(workflow, node.id, "failed", `Flicker projection failed: ${sync.error ?? "unknown error"}`)
-            : { ...workflow, status: "blocked", updatedAt: new Date().toISOString() };
-          state.workflow = workflow;
-          await persistWorkflowState();
-          report(ctx, `fusion plan: Flicker projection blocked · ${sync.error ?? "unknown error"}`, "warning");
+      if (workflow.pendingProjection) {
+        const projected = await projectPendingFlicker(workflow);
+        workflow = projected.workflow;
+        state.workflow = workflow;
+        await persistWorkflowState();
+        if (!projected.ok) {
+          report(ctx, `fusion plan: Flicker projection blocked · ${projected.error ?? "unknown error"}`, "warning");
           return;
         }
       }
@@ -1273,9 +1383,44 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         return;
       }
       if (!workflow) { report(ctx, "fusion resume: no active workflow", "warning"); return; }
+      if (workflow.pendingProjection) {
+        const projected = await projectPendingFlicker(workflow);
+        workflow = projected.workflow;
+        state.workflow = workflow;
+        await persistWorkflowState();
+        report(ctx, projected.ok ? `fusion resume: Flicker ${workflow.status} projection reconciled` : `fusion resume: Flicker projection still blocked · ${projected.error ?? "unknown error"}`, projected.ok ? "info" : "warning");
+        return;
+      }
       const previousStatus = workflow.status;
       let reopenedKind: WorkflowNode["kind"] | null = null;
       if (previousStatus === "blocked") {
+        if (workflow.adapter === "flicker" && !workflow.flickerTicketId) {
+          const resolutionFailure = workflow.nodes.find((node) => node.status === "failed" && node.error?.startsWith("Flicker project resolution failed:"));
+          if (resolutionFailure) {
+            const resolution = await resolveFlickerProject(workflow.repo, { env: environment });
+            if (!resolution.ok || !resolution.projectSlug) { report(ctx, `fusion resume: Flicker project resolution still blocked · ${resolution.error ?? "unknown error"}`, "warning"); return; }
+            workflow = {
+              ...workflow,
+              status: "planning",
+              nodes: workflow.nodes.map((node) => node.id === resolutionFailure.id ? { ...node, status: "pending" as const, error: undefined } : node),
+            };
+          }
+          workflow = await attachFlickerTicket(workflow);
+          state.workflow = workflow;
+          await persistWorkflowState();
+          if (workflow.status === "awaiting-approval") {
+            report(ctx, "fusion resume: Flicker ticket recovered; run /fusion-plan to approve");
+            return;
+          }
+        }
+        const projectionFailure = workflow.nodes.find((node) => node.status === "failed" && node.error?.startsWith("Flicker projection failed:"));
+        if (projectionFailure && workflow.adapter === "flicker" && workflow.flickerTicketId) {
+          const written = await writeFlickerDocument(workflow.flickerTicketId, "task_contract", "Pi Fusion task contract", flickerTaskContractBody(workflow), { env: environment });
+          const sync = written.ok
+            ? await syncFlickerStatus(workflow.flickerTicketId, "running", { env: environment })
+            : { ok: false, error: written.error };
+          if (!sync.ok) { report(ctx, `fusion resume: Flicker projection still blocked · ${sync.error ?? "unknown error"}`, "warning"); return; }
+        }
         const maxRetries = workflow.envelope?.maxRetries ?? 0;
         if (requested && workflow.nodes.some((node) => node.kind === requested)) {
           reopenedKind = requested as WorkflowNode["kind"];
@@ -1301,11 +1446,17 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     description: "Cancel the active workflow",
     handler: async (_args, ctx) => {
       if (!workflow) { report(ctx, "fusion cancel: no active workflow", "warning"); return; }
-      workflow = cancelWorkflow(workflow);
+      let cancelled = cancelWorkflow(workflow);
+      if (cancelled.adapter === "flicker") cancelled = { ...cancelled, pendingProjection: { kind: "cancel", createdAt: new Date().toISOString() } };
+      workflow = cancelled;
       state.workflow = workflow;
       await persistWorkflowState();
-      if (workflow.adapter === "flicker" && workflow.flickerTicketId) {
-        await syncFlickerStatus(workflow.flickerTicketId, workflow.status, { env: environment }).catch(() => undefined);
+      if (cancelled.pendingProjection) {
+        const projected = await projectPendingFlicker(cancelled);
+        workflow = projected.workflow;
+        state.workflow = workflow;
+        await persistWorkflowState();
+        if (!projected.ok) { report(ctx, `fusion cancel: Flicker reconciliation failed · ${projected.error ?? "unknown error"}`, "warning"); return; }
       }
       report(ctx, "fusion cancel: workflow cancelled");
     },

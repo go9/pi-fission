@@ -36,6 +36,21 @@ export interface TicketCreation {
   error?: string;
 }
 
+/** Recover a ticket created before a local crash by its durable workflow marker. */
+export async function findPlanningTicket(workflowId: string, options: { env?: NodeJS.ProcessEnv } = {}): Promise<TicketCreation> {
+  try {
+    const { stdout } = await execFileAsync("flicker", ["ticket", "list", "--json"], { env: options.env ?? process.env, maxBuffer: 20_000_000 });
+    const parsed = JSON.parse(stdout);
+    const tickets = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tickets) ? parsed.tickets : [];
+    const marker = `Pi Fusion workflow: ${workflowId}`;
+    const match = tickets.find((ticket: unknown) => typeof (ticket as { body_md?: unknown })?.body_md === "string" && (ticket as { body_md: string }).body_md.includes(marker));
+    const id = typeof match?.id === "number" ? String(match.id) : typeof match?.id === "string" ? match.id : null;
+    return { ok: true, ticketId: id };
+  } catch (error) {
+    return { ok: false, ticketId: null, error: (error as Error).message.slice(0, 200) };
+  }
+}
+
 /** Create a Flicker ticket during planning (the plan itself), never after mutation. */
 export async function createPlanningTicket(repo: string, title: string, body: string, options: { env?: NodeJS.ProcessEnv } = {}): Promise<TicketCreation> {
   try {
@@ -55,6 +70,16 @@ export async function writeFlickerDocument(ticketId: string, kind: string, title
     return { ok: true };
   } catch (error) {
     return { ok: false, error: (error as Error).message.slice(0, 200) };
+  }
+}
+
+export async function readFlickerTicketStatus(ticketId: string, options: { env?: NodeJS.ProcessEnv } = {}): Promise<{ ok: boolean; status: string | null; error?: string }> {
+  try {
+    const { stdout } = await execFileAsync("flicker", ["ticket", "show", ticketId, "--json"], { env: options.env ?? process.env });
+    const status = JSON.parse(stdout)?.status;
+    return typeof status === "string" ? { ok: true, status } : { ok: false, status: null, error: "Flicker ticket response did not contain a status" };
+  } catch (error) {
+    return { ok: false, status: null, error: (error as Error).message.slice(0, 200) };
   }
 }
 

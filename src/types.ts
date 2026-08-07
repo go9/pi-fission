@@ -179,6 +179,11 @@ export interface ApprovalEnvelope {
 
 export type WorkflowStatus = "planning" | "awaiting-approval" | "running" | "paused" | "cancelled" | "blocked" | "complete" | "recovered";
 
+export interface PendingFlickerProjection {
+  kind: "approve" | "complete" | "cancel";
+  createdAt: string;
+}
+
 export interface WorkflowState {
   id: string;
   repo: string;
@@ -192,6 +197,7 @@ export interface WorkflowState {
   updatedAt: string;
   ownerSession: string;
   ownerPid: number;
+  pendingProjection: PendingFlickerProjection | null;
 }
 
 /** A pin fixes a user choice until explicitly cleared. */

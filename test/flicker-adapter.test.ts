@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
-import { resolveFlickerProject, syncFlickerStatus, writeFlickerDocument } from "../src/flicker-adapter.ts";
+import { findPlanningTicket, readFlickerTicketStatus, resolveFlickerProject, syncFlickerStatus, writeFlickerDocument } from "../src/flicker-adapter.ts";
 
 async function fakeFlicker(status = "backlog") {
   const dir = await mkdtemp(join(tmpdir(), "pi-fusion-flicker-"));
@@ -15,6 +15,8 @@ if [ "$1 $2" = "project show" ]; then
   printf '%s\\n' '{"project":{"id":23,"slug":"flicker"}}'
 elif [ "$1 $2" = "ticket show" ]; then
   printf '%s\\n' '{"id":1501,"status":"${status}"}'
+elif [ "$1 $2" = "ticket list" ]; then
+  printf '%s\\n' '[{"id":1501,"body_md":"Pi Fusion workflow: wf-1"}]'
 else
   printf '%s\\n' '{"ok":true}'
 fi
@@ -27,6 +29,12 @@ describe("Flicker adapter lifecycle", () => {
   it("resolves the nested project.slug returned by the current CLI", async () => {
     const fake = await fakeFlicker();
     assert.deepEqual(await resolveFlickerProject(fake.dir, { env: fake.env }), { ok: true, projectSlug: "flicker" });
+  });
+
+  it("finds an orphaned planning ticket by durable workflow marker", async () => {
+    const fake = await fakeFlicker();
+    assert.deepEqual(await findPlanningTicket("wf-1", { env: fake.env }), { ok: true, ticketId: "1501" });
+    assert.deepEqual(await readFlickerTicketStatus("1501", { env: fake.env }), { ok: true, status: "backlog" });
   });
 
   it("selects and starts a backlog ticket but never completes it for local workflow completion", async () => {

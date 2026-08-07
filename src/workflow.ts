@@ -1,5 +1,5 @@
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   ApprovalEnvelope,
@@ -106,6 +106,7 @@ export function createWorkflowState(input: {
     updatedAt: timestamp,
     ownerSession: input.ownerSession,
     ownerPid: input.ownerPid,
+    pendingProjection: null,
   };
 }
 
@@ -258,27 +259,49 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Serialize repository ownership checks and workflow creation across Pi processes. */
-export async function withRepoWorkflowLock<T>(repo: string, path: string, operation: () => Promise<T>): Promise<T> {
+const heldStoreLocks = new Set<string>();
+
+export async function canonicalRepository(repo: string): Promise<string> {
+  try { return await realpath(repo); } catch { return resolve(repo); }
+}
+
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+/** Serialize every read-modify-write against the shared workflow store. */
+export async function withRepoWorkflowLock<T>(_repo: string, path: string, operation: () => Promise<T>): Promise<T> {
+  const key = resolve(path);
+  if (heldStoreLocks.has(key)) return operation();
   const parent = join(dirname(path), ".pi-fusion-locks");
-  const lock = join(parent, createHash("sha256").update(repo).digest("hex").slice(0, 24));
+  const lock = join(parent, createHash("sha256").update(key).digest("hex").slice(0, 24));
+  const ownerPath = join(lock, "owner.json");
   await mkdir(parent, { recursive: true });
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
     try {
       await mkdir(lock);
-      try { return await operation(); } finally { await rm(lock, { recursive: true, force: true }); }
+      await writeFile(ownerPath, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
+      heldStoreLocks.add(key);
+      try { return await operation(); } finally {
+        heldStoreLocks.delete(key);
+        await rm(lock, { recursive: true, force: true });
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       try {
-        const ageMs = Date.now() - (await stat(lock)).mtimeMs;
-        if (ageMs > 120_000) { await rm(lock, { recursive: true, force: true }); continue; }
+        const owner = JSON.parse(await readFile(ownerPath, "utf8"));
+        if (!processAlive(Number(owner?.pid))) { await rm(lock, { recursive: true, force: true }); continue; }
       } catch {
-        continue;
+        // A creator may be between mkdir and owner write. Only reclaim an
+        // ownerless lock after a bounded grace period.
+        try {
+          if (Date.now() - (await stat(lock)).mtimeMs > 5_000) { await rm(lock, { recursive: true, force: true }); continue; }
+        } catch { /* raced with owner cleanup */ }
       }
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      await new Promise((complete) => setTimeout(complete, 25));
     }
   }
-  throw new Error("Pi Fusion repository workflow lock timed out");
+  throw new Error("Pi Fusion workflow-store lock timed out");
 }
 
 /** Session adapter: workflow truth persists under the Pi agent data directory, keyed by repo. */
@@ -303,23 +326,33 @@ export async function saveWorkflows(workflows: WorkflowState[], path = workflowS
 }
 
 export async function upsertWorkflow(workflow: WorkflowState, path = workflowStorePath()): Promise<void> {
-  const workflows = await loadWorkflows(path);
-  const index = workflows.findIndex((item) => item.id === workflow.id);
-  if (index >= 0) workflows[index] = workflow;
-  else workflows.push(workflow);
-  await saveWorkflows(workflows, path);
+  await withRepoWorkflowLock(workflow.repo, path, async () => {
+    const workflows = await loadWorkflows(path);
+    const index = workflows.findIndex((item) => item.id === workflow.id);
+    if (index >= 0) workflows[index] = workflow;
+    else workflows.push(workflow);
+    await saveWorkflows(workflows, path);
+  });
 }
 
-const RESUMABLE_WORKFLOW_STATUSES: WorkflowStatus[] = ["running", "paused", "awaiting-approval", "blocked", "recovered"];
+const RESUMABLE_WORKFLOW_STATUSES: WorkflowStatus[] = ["planning", "running", "paused", "awaiting-approval", "blocked", "recovered"];
 
 /** Active or recoverable workflows for a repository in the current session. */
 export async function activeWorkflowForRepo(repo: string, ownerSession: string, path = workflowStorePath()): Promise<WorkflowState | null> {
+  const canonical = await canonicalRepository(repo);
   const workflows = await loadWorkflows(path);
-  return workflows.find((item) => item.repo === repo && item.ownerSession === ownerSession && RESUMABLE_WORKFLOW_STATUSES.includes(item.status)) ?? null;
+  for (const item of workflows) {
+    if (await canonicalRepository(item.repo) === canonical && item.ownerSession === ownerSession && (item.pendingProjection != null || RESUMABLE_WORKFLOW_STATUSES.includes(item.status))) return item;
+  }
+  return null;
 }
 
 /** Concurrent-session ownership warning: another session owns a live or recoverable workflow on this repo. */
 export async function foreignOwnerForRepo(repo: string, ownerSession: string, path = workflowStorePath()): Promise<WorkflowState | null> {
+  const canonical = await canonicalRepository(repo);
   const workflows = await loadWorkflows(path);
-  return workflows.find((item) => item.repo === repo && item.ownerSession !== ownerSession && RESUMABLE_WORKFLOW_STATUSES.includes(item.status)) ?? null;
+  for (const item of workflows) {
+    if (await canonicalRepository(item.repo) === canonical && item.ownerSession !== ownerSession && (item.pendingProjection != null || RESUMABLE_WORKFLOW_STATUSES.includes(item.status))) return item;
+  }
+  return null;
 }

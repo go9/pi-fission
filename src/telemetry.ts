@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
-import type { ActiveModelCategory, Classification, Phase, Recommendation } from "./types.ts";
+import type { ActiveModelCategory, Classification, Phase, Recommendation, RouteOnceStatus } from "./types.ts";
 import { CANONICAL_PROFILES } from "./types.ts";
 
 const PHASES = new Set<Phase>(["explore", "implement", "plan", "review", "research", "vision", "unknown"]);
@@ -16,6 +16,9 @@ const REASON_CODES = new Set([
 ]);
 const PROFILES = new Set<string>(CANONICAL_PROFILES);
 const ACTIVE_MODEL_CATEGORIES = new Set<string>([...CANONICAL_PROFILES, "external", "unknown"]);
+const ROUTE_ONCE_STATUSES = new Set<RouteOnceStatus>([
+  "shadow", "armed", "applied", "skipped", "restored", "restore-failed", "user-overrode",
+]);
 
 export interface AggregateUsage {
   inputTokens?: number;
@@ -33,6 +36,7 @@ export interface TelemetryRecord {
   reasonCodes: string[];
   confidence: number;
   activeModelCategory: ActiveModelCategory;
+  routeOnceStatus?: RouteOnceStatus;
   usage: AggregateUsage;
   durationMs: number | null;
   outcome: "success" | "error" | "unknown";
@@ -78,6 +82,7 @@ export function createTelemetryRecord(input: {
   classification: Classification;
   recommendation: Recommendation;
   activeModelCategory?: unknown;
+  routeOnceStatus?: unknown;
   usage?: unknown;
   durationMs?: unknown;
   outcome?: unknown;
@@ -93,6 +98,9 @@ export function createTelemetryRecord(input: {
     reasonCodes: [...new Set(input.recommendation.reasonCodes.filter((code) => REASON_CODES.has(code)))].slice(0, 8),
     confidence: Math.max(0, Math.min(1, finiteNonNegative(input.recommendation.confidence) ?? 0)),
     activeModelCategory: sanitizeActiveModelCategory(input.activeModelCategory),
+    routeOnceStatus: typeof input.routeOnceStatus === "string" && ROUTE_ONCE_STATUSES.has(input.routeOnceStatus as RouteOnceStatus)
+      ? input.routeOnceStatus as RouteOnceStatus
+      : "shadow",
     usage: sanitizeUsage(input.usage),
     durationMs: finiteNonNegative(input.durationMs) ?? null,
     outcome: input.outcome === "success" || input.outcome === "error" ? input.outcome : "unknown",
@@ -111,6 +119,7 @@ function isTelemetryRecord(value: unknown): value is TelemetryRecord {
     && item.reasonCodes.every((reason) => typeof reason === "string" && REASON_CODES.has(reason))
     && typeof item.confidence === "number"
     && sanitizeActiveModelCategory(item.activeModelCategory) === item.activeModelCategory
+    && (item.routeOnceStatus === undefined || ROUTE_ONCE_STATUSES.has(item.routeOnceStatus))
     && typeof item.usage === "object"
     && (item.durationMs === null || finiteNonNegative(item.durationMs) !== undefined)
     && (item.outcome === "success" || item.outcome === "error" || item.outcome === "unknown");

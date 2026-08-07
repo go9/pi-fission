@@ -1,6 +1,6 @@
 import type { ConfigResult } from "./config.ts";
 import type { DiscoveryResult } from "./router.ts";
-import type { Classification, Recommendation } from "./types.ts";
+import type { Classification, Recommendation, RouteOnceReason, RouteOnceStatus } from "./types.ts";
 import type { TelemetryRecord } from "./telemetry.ts";
 
 export interface FusionView {
@@ -9,6 +9,18 @@ export interface FusionView {
   classification: Classification | null;
   recommendation: Recommendation | null;
   activeModel: string | null;
+  routeOnce?: { status: RouteOnceStatus; reason: RouteOnceReason | null };
+}
+
+function routeOnce(view: FusionView): { status: RouteOnceStatus; reason: RouteOnceReason | null } {
+  return view.routeOnce ?? { status: "shadow", reason: null };
+}
+
+function routeLabel(view: FusionView): string {
+  const route = routeOnce(view);
+  if (route.status === "shadow") return "shadow";
+  if (route.reason) return `one-shot ${route.status} (${route.reason})`;
+  return `one-shot ${route.status}`;
 }
 
 function percent(confidence: number): string {
@@ -27,44 +39,50 @@ function health(view: FusionView): Health {
 
 export function footerText(view: FusionView): string {
   const state = health(view);
-  if (state === "invalid-config") return "fusion: shadow · invalid-config";
-  if (state === "unavailable") return "fusion: shadow · unavailable";
-  if (state === "low-confidence") return "fusion: shadow · uncertain · current model retained";
-  if (state === "no-eligible-profile") return "fusion: shadow · no-eligible-profile · current model retained";
-  if (!view.classification || !view.recommendation?.profile) return "fusion: shadow · ready";
-  return `fusion: shadow · ${view.classification.phase} → ${view.recommendation.profile}`;
+  const route = routeOnce(view);
+  if (route.status === "armed") return "fusion: one-shot armed · next task";
+  if (route.status === "restored") return "fusion: one-shot restored · shadow ready";
+  if (route.status === "restore-failed") return "fusion: one-shot restore-failed · check model";
+  if (route.status === "user-overrode") return "fusion: one-shot cancelled · user model retained";
+  if (state === "invalid-config") return `fusion: ${routeLabel(view)} · invalid-config`;
+  if (state === "unavailable") return `fusion: ${routeLabel(view)} · unavailable`;
+  if (state === "low-confidence") return `fusion: ${routeLabel(view)} · uncertain · current model retained`;
+  if (state === "no-eligible-profile") return `fusion: ${routeLabel(view)} · no-eligible-profile · current model retained`;
+  if (!view.classification || !view.recommendation?.profile) return `fusion: ${routeLabel(view)} · ready`;
+  return `fusion: ${routeLabel(view)} · ${view.classification.phase} → ${view.recommendation.profile}`;
 }
 
 export function formatStatus(view: FusionView): string {
   const state = health(view);
   const active = view.activeModel ?? "unknown";
+  const route = routeLabel(view);
   if (state === "invalid-config") {
-    return `fusion: shadow · invalid-config · ${view.config.diagnostics.join("; ")} · active Pi model: ${active}`;
+    return `fusion: ${route} · invalid-config · ${view.config.diagnostics.join("; ")} · active Pi model: ${active}`;
   }
   if (state === "unavailable") {
-    return `fusion: shadow · unavailable · ${view.discovery?.diagnostic ?? "discovery not started"} · active Pi model: ${active}`;
+    return `fusion: ${route} · unavailable · ${view.discovery?.diagnostic ?? "discovery not started"} · active Pi model: ${active}`;
   }
   if (!view.classification || !view.recommendation) {
-    return `fusion: shadow · ready · no recommendation yet · active Pi model: ${active}`;
+    return `fusion: ${route} · ready · no recommendation yet · active Pi model: ${active}`;
   }
   if (state === "low-confidence") {
-    return `fusion: shadow · low-confidence (${percent(view.recommendation.confidence)}) · current model retained · active Pi model: ${active}`;
+    return `fusion: ${route} · low-confidence (${percent(view.recommendation.confidence)}) · current model retained · active Pi model: ${active}`;
   }
   if (state === "no-eligible-profile") {
-    return `fusion: shadow · no-eligible-profile (${percent(view.recommendation.confidence)}) · required capability floor is unmet or profiles are unresolved · current model retained · active Pi model: ${active}`;
+    return `fusion: ${route} · no-eligible-profile (${percent(view.recommendation.confidence)}) · required capability floor is unmet or profiles are unresolved · current model retained · active Pi model: ${active}`;
   }
-  return `fusion: shadow · ready · ${view.classification.phase} → recommended ${view.recommendation.profile} (${percent(view.recommendation.confidence)}) · active Pi model: ${active}`;
+  return `fusion: ${route} · ready · ${view.classification.phase} → recommended ${view.recommendation.profile} (${percent(view.recommendation.confidence)}) · active Pi model: ${active}`;
 }
 
 export function formatExplain(view: FusionView): string {
   if (view.config.status !== "ready") {
-    return `fusion explain: shadow · invalid-config · ${view.config.diagnostics.join("; ")}`;
+    return `fusion explain: ${routeLabel(view)} · invalid-config · ${view.config.diagnostics.join("; ")}`;
   }
   if (view.discovery?.status !== "ready") {
-    return `fusion explain: shadow · unavailable · ${view.discovery?.diagnostic ?? "discovery not started"}`;
+    return `fusion explain: ${routeLabel(view)} · unavailable · ${view.discovery?.diagnostic ?? "discovery not started"}`;
   }
   if (!view.classification || !view.recommendation) {
-    return "fusion explain: shadow · empty · submit a task to create a recommendation";
+    return `fusion explain: ${routeLabel(view)} · empty · submit a task to create a recommendation`;
   }
   const required = Object.entries(view.classification.requiredCapabilities)
     .filter(([, value]) => value === true || (typeof value === "number" && value > 0))
@@ -79,7 +97,7 @@ export function formatExplain(view: FusionView): string {
   if (view.recommendation.profile) route = `recommended ${view.recommendation.profile}/${view.recommendation.modelId}`;
   else if (view.recommendation.reasonCodes.includes("policy.no-eligible-profile")) route = "no-eligible-profile; current model retained";
   else route = "low-confidence; current model retained";
-  return `fusion explain: shadow · ${route} · confidence ${percent(view.recommendation.confidence)} · reasons ${view.recommendation.reasonCodes.join(", ")} · requires ${required} · eligible ${eligible} · rejected ${rejected} · active Pi model ${view.activeModel ?? "unknown"}`;
+  return `fusion explain: ${routeLabel(view)} · ${route} · confidence ${percent(view.recommendation.confidence)} · reasons ${view.recommendation.reasonCodes.join(", ")} · requires ${required} · eligible ${eligible} · rejected ${rejected} · active Pi model ${view.activeModel ?? "unknown"}`;
 }
 
 export function formatHistory(records: readonly TelemetryRecord[]): string {
@@ -87,7 +105,7 @@ export function formatHistory(records: readonly TelemetryRecord[]): string {
   const lines = records.map((record) => {
     const route = record.recommendedProfile
       ?? (record.reasonCodes.includes("policy.no-eligible-profile") ? "no-eligible-profile" : "current-model-retained");
-    return `${record.timestamp} · ${record.phase} → ${route} · ${percent(record.confidence)} · ${record.outcome} · active ${record.activeModelCategory}`;
+    return `${record.timestamp} · ${record.phase} → ${route} · ${percent(record.confidence)} · ${record.outcome} · route ${record.routeOnceStatus ?? "shadow"} · active ${record.activeModelCategory}`;
   });
   return `fusion history: shadow · ${records.length} recent\n${lines.join("\n")}`;
 }
@@ -104,5 +122,5 @@ export function formatConfig(view: FusionView): string {
   const authentication = config.provider.apiKey
     ? "API key env reference configured (value hidden)"
     : "keyless loopback authentication";
-  return `fusion config: shadow · ready · path ${view.config.path} · provider ${config.provider.id} · profiles ${Object.keys(config.profiles).length} · aliases ${Object.keys(config.aliases).length} · discovery ${discovery}${unresolved} · ${authentication}`;
+  return `fusion config: shadow-default · one-shot available · path ${view.config.path} · provider ${config.provider.id} · profiles ${Object.keys(config.profiles).length} · aliases ${Object.keys(config.aliases).length} · discovery ${discovery}${unresolved} · ${authentication}`;
 }

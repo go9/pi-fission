@@ -33,8 +33,9 @@ describe("telemetry privacy", () => {
       assert.doesNotMatch(serialized, new RegExp(sentinel));
     }
     assert.equal(record.activeModelCategory, "unknown");
+    assert.equal(record.routeOnceStatus, "shadow");
     assert.deepEqual(Object.keys(record).sort(), [
-      "activeModelCategory", "confidence", "durationMs", "outcome", "phase", "reasonCodes", "recommendedProfile", "schemaVersion", "timestamp", "usage",
+      "activeModelCategory", "confidence", "durationMs", "outcome", "phase", "reasonCodes", "recommendedProfile", "routeOnceStatus", "schemaVersion", "timestamp", "usage",
     ]);
 
     const { dir } = await writeConfig(validConfig());

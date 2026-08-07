@@ -1,14 +1,15 @@
 {
   "name": "pi-fusion",
   "version": "0.1.0",
-  "description": "Privacy-safe shadow routing recommendations for Pi and 9Router",
+  "description": "Privacy-safe shadow and one-shot active routing for Pi and 9Router",
   "type": "module",
   "license": "MIT",
   "keywords": [
     "pi-package",
     "pi-extension",
     "9router",
-    "shadow-routing"
+    "shadow-routing",
+    "active-routing"
   ],
   "engines": {
     "node": ">=22.19.0"

@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { parseConfig, type ConfigResult } from "../src/config.ts";
 import { classify } from "../src/classifier.ts";
 import { recommend } from "../src/policy.ts";
-import { formatConfig, formatExplain, formatHistory, formatStatus, type FusionView } from "../src/presentation.ts";
+import { footerText, formatConfig, formatExplain, formatHistory, formatStatus, type FusionView } from "../src/presentation.ts";
 import type { CanonicalProfile, Capabilities } from "../src/types.ts";
 import type { DiscoveryResult } from "../src/router.ts";
 import { validConfig } from "../test-support/helpers.ts";
@@ -121,5 +121,18 @@ describe("explain and command state formatting", () => {
     assert.match(ready, /recommended pi-code/);
     assert.match(ready, /active Pi model: existing\/actual-model/);
     assert.doesNotMatch(ready, /active Pi model: pi-code/);
+
+    const baseView: FusionView = { config: readyConfig(), discovery, classification: code, recommendation: route, activeModel: "existing/actual-model" };
+    assert.match(formatStatus({ ...baseView, routeOnce: { status: "armed", reason: null } }), /one-shot armed/);
+    assert.match(formatExplain({ ...baseView, routeOnce: { status: "applied", reason: null } }), /one-shot applied/);
+    assert.match(formatStatus({ ...baseView, routeOnce: { status: "skipped", reason: "model-not-found" } }), /one-shot skipped \(model-not-found\)/);
+    assert.match(footerText({ ...baseView, routeOnce: { status: "restored", reason: null } }), /one-shot restored/);
+    assert.match(footerText({ ...baseView, routeOnce: { status: "restore-failed", reason: "restore-failed" } }), /restore-failed/);
+    assert.match(formatConfig(baseView), /shadow-default · one-shot available/);
+    assert.match(formatHistory([{
+      schemaVersion: 1, timestamp: "2026-01-01T00:00:00.000Z", phase: "implement", recommendedProfile: "pi-code",
+      reasonCodes: ["phase.implement", "policy.preferred"], confidence: 0.9, activeModelCategory: "pi-code",
+      routeOnceStatus: "restored", usage: {}, durationMs: 1, outcome: "success",
+    }]), /route restored/);
   });
 });

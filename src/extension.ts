@@ -17,6 +17,8 @@ import type {
   Classification,
   FusionConfig,
   Recommendation,
+  RouteOnceReason,
+  RouteOnceStatus,
 } from "./types.ts";
 
 export interface FusionExtensionOptions {
@@ -40,10 +42,15 @@ interface RuntimeState {
   recommendation: Recommendation | null;
   activeModel: string | null;
   activeModelCategory: ActiveModelCategory;
+  routeOnceArmed: boolean;
+  routeOnceStatus: RouteOnceStatus;
+  routeOnceReason: RouteOnceReason | null;
   startedAt: number | null;
   usage: AggregateUsage;
   outcome: "success" | "error" | "unknown";
 }
+
+type ActivePiModel = NonNullable<ExtensionContext["model"]>;
 
 function modelIdentity(ctx: ExtensionContext): ModelIdentity | null {
   return ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : null;
@@ -114,6 +121,7 @@ function asView(state: RuntimeState): FusionView {
     classification: state.classification,
     recommendation: state.recommendation,
     activeModel: state.activeModel,
+    routeOnce: { status: state.routeOnceStatus, reason: state.routeOnceReason },
   };
 }
 
@@ -159,12 +167,19 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     recommendation: null,
     activeModel: null,
     activeModelCategory: "unknown",
+    routeOnceArmed: false,
+    routeOnceStatus: "shadow",
+    routeOnceReason: null,
     startedAt: null,
     usage: {},
     outcome: "unknown",
   };
   const clock = options.now ?? Date.now;
   const stderr = options.stderr ?? ((message: string) => process.stderr.write(message));
+  let restoreModel: ActivePiModel | null = null;
+  let routeOnceActive = false;
+  let deferTelemetryUntilSettled = false;
+  let expectedInternalSelection: ModelIdentity | null = null;
 
   const setActiveModel = (identity: ModelIdentity | null): void => {
     state.activeModel = displayModel(identity);
@@ -192,6 +207,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       classification: state.classification,
       recommendation: state.recommendation,
       activeModelCategory: state.activeModelCategory,
+      routeOnceStatus: state.routeOnceStatus,
       usage: state.usage,
       durationMs,
       outcome: state.outcome,
@@ -215,15 +231,82 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     if (ctx.mode === "tui") ctx.ui.setStatus("pi-fusion", undefined);
   });
 
-  pi.on("before_agent_start", (event, ctx) => {
+  pi.on("before_agent_start", async (event, ctx) => {
     setActiveModel(modelIdentity(ctx));
     state.classification = classify({ text: event.prompt, imageCount: event.images?.length ?? 0 });
     state.startedAt = clock();
     state.usage = {};
     state.outcome = "unknown";
     reroute();
+
+    if (!state.routeOnceArmed) {
+      if (!routeOnceActive && !deferTelemetryUntilSettled) {
+        state.routeOnceStatus = "shadow";
+        state.routeOnceReason = null;
+      }
+      updateFooter(state, ctx);
+      return;
+    }
+
+    // Consume before any selection attempt so a failure cannot route a later surprise request.
+    state.routeOnceArmed = false;
+    state.routeOnceStatus = "skipped";
+    state.routeOnceReason = null;
+
+    if (state.config.status !== "ready" || state.discovery?.status !== "ready") {
+      state.routeOnceReason = "provider-unavailable";
+      updateFooter(state, ctx);
+      return;
+    }
+    if (!state.recommendation?.profile || !state.recommendation.modelId) {
+      state.routeOnceReason = "no-recommendation";
+      updateFooter(state, ctx);
+      return;
+    }
+
+    const target = ctx.modelRegistry.find(state.config.config.provider.id, state.recommendation.modelId);
+    if (!target) {
+      state.routeOnceReason = "model-not-found";
+      updateFooter(state, ctx);
+      return;
+    }
+    const previous = ctx.model;
+    if (!previous) {
+      state.routeOnceReason = "current-model-missing";
+      updateFooter(state, ctx);
+      return;
+    }
+    if (previous.provider === target.provider && previous.id === target.id) {
+      state.routeOnceStatus = "applied";
+      state.routeOnceReason = "already-selected";
+      setActiveModel({ provider: target.provider, id: target.id });
+      updateFooter(state, ctx);
+      return;
+    }
+
+    expectedInternalSelection = { provider: target.provider, id: target.id };
+    let selected = false;
+    try {
+      selected = await pi.setModel(target);
+    } catch {
+      expectedInternalSelection = null;
+      state.routeOnceReason = "selection-error";
+      updateFooter(state, ctx);
+      return;
+    }
+    if (!selected) {
+      expectedInternalSelection = null;
+      state.routeOnceReason = "selection-failed";
+      updateFooter(state, ctx);
+      return;
+    }
+
+    restoreModel = previous;
+    routeOnceActive = true;
+    deferTelemetryUntilSettled = true;
+    state.routeOnceStatus = "applied";
+    setActiveModel({ provider: target.provider, id: target.id });
     updateFooter(state, ctx);
-    // Deliberately return nothing: shadow mode never changes prompt or execution.
   });
 
   pi.on("tool_result", (event, ctx) => {
@@ -246,26 +329,82 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     state.usage = mergeUsage(state.usage, sanitizeUsage(messageUsage));
     if (state.outcome === "unknown") state.outcome = "success";
     setActiveModel(modelIdentity(ctx));
-    await persist();
+    if (!deferTelemetryUntilSettled) await persist();
     updateFooter(state, ctx);
   });
 
   pi.on("model_select", (event, ctx) => {
-    setActiveModel({ provider: event.model.provider, id: event.model.id });
+    const selected = { provider: event.model.provider, id: event.model.id };
+    const internal = expectedInternalSelection
+      && expectedInternalSelection.provider === selected.provider
+      && expectedInternalSelection.id === selected.id;
+    if (internal) {
+      expectedInternalSelection = null;
+    } else if (routeOnceActive) {
+      routeOnceActive = false;
+      restoreModel = null;
+      state.routeOnceStatus = "user-overrode";
+      state.routeOnceReason = "user-selected-model";
+    }
+    setActiveModel(selected);
+    updateFooter(state, ctx);
+  });
+
+  pi.on("agent_settled", async (_event, ctx) => {
+    if (routeOnceActive && restoreModel) {
+      const previous = restoreModel;
+      routeOnceActive = false;
+      restoreModel = null;
+      expectedInternalSelection = { provider: previous.provider, id: previous.id };
+      let restored = false;
+      try {
+        restored = await pi.setModel(previous);
+      } catch {
+        restored = false;
+      }
+      expectedInternalSelection = null;
+      if (restored) {
+        state.routeOnceStatus = "restored";
+        state.routeOnceReason = null;
+        setActiveModel({ provider: previous.provider, id: previous.id });
+      } else {
+        state.routeOnceStatus = "restore-failed";
+        state.routeOnceReason = "restore-failed";
+      }
+    }
+    if (deferTelemetryUntilSettled) {
+      deferTelemetryUntilSettled = false;
+      await persist();
+    }
     updateFooter(state, ctx);
   });
 
   const report = (ctx: ExtensionContext, message: string): void => show(ctx, message, healthLevel(state), stderr);
+  pi.registerCommand("fusion-route-once", {
+    description: "Route exactly the next task through an eligible Pi Fusion recommendation",
+    handler: async (_args, ctx) => {
+      if (state.routeOnceArmed || routeOnceActive || deferTelemetryUntilSettled) {
+        report(ctx, `fusion: one-shot ${state.routeOnceArmed ? "already armed" : "already active"} · no additional route queued`);
+        return;
+      }
+      state.routeOnceArmed = true;
+      state.routeOnceStatus = "armed";
+      state.routeOnceReason = null;
+      setActiveModel(modelIdentity(ctx));
+      updateFooter(state, ctx);
+      report(ctx, "fusion: one-shot armed · exactly the next task will route if eligible");
+    },
+  });
   pi.registerCommand("fusion-status", {
-    description: "Show Pi Fusion shadow health and current recommendation",
+    description: "Show Pi Fusion shadow and one-shot routing health",
     handler: async (_args, ctx) => report(ctx, formatStatus(asView(state))),
   });
   pi.registerCommand("fusion-explain", {
-    description: "Explain the current shadow recommendation and capability eligibility",
+    description: "Explain the current recommendation and one-shot route state",
     handler: async (_args, ctx) => report(ctx, formatExplain(asView(state))),
   });
   pi.registerCommand("fusion-history", {
-    description: "Show recent content-free shadow routing decisions",
+    description: "Show recent content-free shadow and one-shot routing decisions",
     handler: async (_args, ctx) => {
       try {
         const records = telemetry ? await telemetry.recent(20) : [];

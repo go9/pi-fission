@@ -1,6 +1,6 @@
 # pi-fusion
 
-`pi-fusion` is a standalone Pi package that observes a parent Pi session and recommends a semantic 9Router profile. Version 0.1 is **strictly shadow mode**: it never selects a model or thinking level, delegates work, changes prompts or tool results, edits project files, or changes workflow/release state.
+`pi-fusion` is a standalone Pi package that observes a parent Pi session and recommends a semantic 9Router profile. It remains **shadow mode by default**. The only active path is an explicit, in-memory `/fusion-route-once` arm for exactly the next eligible task; after that full agent run settles, Pi Fusion restores the exact model that was active before the test. It never changes thinking level, delegates work, changes prompts or tool results, edits project files, or changes workflow/release state.
 
 Canonical profiles are `pi-fast`, `pi-code`, `pi-reason`, `pi-review`, `pi-research`, and `pi-vision`. Configurable aliases let a 9Router catalogue expose names such as `plan`, `sidekick`, `explore`, or `small-model` while policy remains canonical and capability checked.
 
@@ -10,7 +10,7 @@ Canonical profiles are `pi-fast`, `pi-code`, `pi-reason`, `pi-review`, `pi-resea
 - `src/classifier.ts` — pure deterministic task/phase/risk/capability classification.
 - `src/policy.ts` — pure stable routing policy and capability-floor enforcement.
 - `src/router.ts` — OpenAI-compatible `/models` discovery with bounded failures.
-- `src/extension.ts` — read-only Pi lifecycle observer, provider registration, and commands.
+- `src/extension.ts` — Pi lifecycle observer, provider registration, commands, and bounded one-shot model selection/restoration.
 - `src/telemetry.ts` — bounded content-free JSONL records.
 - `src/presentation.ts` — compact shadow-labelled status and explanations.
 
@@ -51,15 +51,26 @@ Aliases are merged over the built-in examples and may point only to canonical pr
 
 ## Pi UX
 
-Every route surface distinguishes a recommendation from Pi's actual active model and includes the word `shadow`:
+Every route surface distinguishes a recommendation from Pi's actual active model and labels the runtime as shadow, one-shot armed, applied, skipped, restored, restore-failed, or user-overrode:
 
-- `/fusion-status` — ready, low-confidence, unavailable, or invalid-config health.
-- `/fusion-explain` — confidence, fixed reason codes, capability requirements, and eligible/rejected profiles.
-- `/fusion-history` — bounded recent content-free records, including an explicit empty state.
-- `/fusion-config` — resolved path and diagnostics; credential values are never shown.
-- TUI footer — `fusion: shadow · <phase> → <profile>`.
+- `/fusion-route-once` — explicitly arm at most the next non-command task; repeated calls never stack.
+- `/fusion-status` — ready, low-confidence, unavailable, invalid-config, and current one-shot state.
+- `/fusion-explain` — confidence, fixed reason codes, capability requirements, eligible/rejected profiles, and one-shot state.
+- `/fusion-history` — bounded recent content-free records with allow-listed one-shot status, including an explicit empty state.
+- `/fusion-config` — resolved path, shadow-default/one-shot availability, and diagnostics; credential values are never shown.
+- TUI footer — compact shadow or one-shot state.
 
-The extension uses no dialogs. In print/JSON modes it does not prompt or install a footer; explicit `/fusion-*` commands write safe shadow status text to stderr so JSON stdout remains machine-readable. In RPC/TUI modes commands use Pi notifications.
+To perform one reversible active test in an interactive Pi session:
+
+```text
+/fusion-route-once
+Plan a small, clearly scoped implementation.
+/fusion-status
+```
+
+The arm is consumed before model lookup or selection, so an unavailable provider, low-confidence/no-eligible recommendation, registry miss, or selection failure cannot unexpectedly route a later prompt. A successful differing selection is held across all tool turns, retries, and queued continuations, then restored only at `agent_settled`. Selecting a model yourself during the active run cancels stale restoration so your choice wins. No configuration migration or persistent active toggle exists.
+
+The extension uses no dialogs. In print/JSON modes it does not prompt or install a footer; explicit `/fusion-*` commands write safe status text to stderr so JSON stdout remains machine-readable. In RPC/TUI modes commands use Pi notifications.
 
 ## Privacy and telemetry
 
@@ -69,12 +80,17 @@ When enabled, telemetry is written with mode `0600` to `~/.pi/agent/extensions/p
 - phase and recommended canonical profile;
 - fixed reason codes and confidence;
 - an allow-listed active-model category: canonical profile, `external`, or `unknown`;
+- an allow-listed one-shot route status (never a raw model id or prompt-derived value);
 - aggregate token/cost metadata when available;
 - duration and success/error/unknown outcome.
 
 Prompts, code, credentials, account identifiers, arbitrary model or private deployment identifiers, raw tool input/output, and provider response bodies have no telemetry fields and are never serialized. Existing telemetry files are forced to mode `0600`; symbolic-link and non-regular targets are rejected. The file can be deleted independently to roll back local evidence.
 
 For isolated smoke tests without changing global Pi settings, set `PI_FUSION_CONFIG_PATH` to an absolute temporary config path before loading the package. This override changes only the config read location; it does not install or activate routing.
+
+## Rollback
+
+One-shot state is memory-only and disappears on Pi reload/restart. To stop a pending test, reload Pi before submitting the next task. To roll back the package, remove its local package entry with Pi's normal uninstall command or point that entry back to a reviewed shadow-only checkout; the extension has no project data or workflow state to migrate. Delete the telemetry JSONL independently if local routing evidence should be removed.
 
 ## Development
 

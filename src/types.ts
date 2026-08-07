@@ -12,6 +12,24 @@ export type Phase = "explore" | "implement" | "plan" | "review" | "research" | "
 export type Complexity = "low" | "medium" | "high" | "unknown";
 export type Risk = "low" | "medium" | "high" | "protected" | "unknown";
 export type ActiveModelCategory = CanonicalProfile | "external" | "unknown";
+export type RouteOnceStatus =
+  | "shadow"
+  | "armed"
+  | "applied"
+  | "skipped"
+  | "restored"
+  | "restore-failed"
+  | "user-overrode";
+export type RouteOnceReason =
+  | "already-selected"
+  | "current-model-missing"
+  | "model-not-found"
+  | "no-recommendation"
+  | "provider-unavailable"
+  | "restore-failed"
+  | "selection-error"
+  | "selection-failed"
+  | "user-selected-model";
 
 export interface Capabilities {
   tools: boolean;

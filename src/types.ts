@@ -13,8 +13,8 @@ export type Phase = "clarify" | "explore" | "research" | "plan" | "plan-review" 
 export type Complexity = "low" | "medium" | "high" | "unknown";
 export type Risk = "low" | "medium" | "high" | "protected" | "unknown";
 export type Mode = "off" | "shadow" | "active";
-export type ActiveModelCategory = CanonicalProfile | "external" | "unknown";
 export type MutationIntent = "read-only" | "mutation" | "unknown";
+export type ActiveThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface Capabilities {
   tools: boolean;
@@ -30,17 +30,16 @@ export interface ProfileConfig {
 }
 
 export interface ProjectOverride {
-  /** Absolute repository path (normalized). */
   repo: string;
   profiles: Partial<Record<CanonicalProfile, string>>;
 }
 
+/** Retained in config v2 solely for backwards compatibility. Fusion no longer tunes itself. */
 export interface TuningConfig {
   enabled: boolean;
   file: string;
   maxEntries: number;
   minEvidence: number;
-  /** Hard caps tuning may never exceed. */
   maxFanout: number;
   maxDepth: number;
   maxRetries: number;
@@ -59,6 +58,7 @@ export interface FusionConfig {
   profiles: Record<CanonicalProfile, ProfileConfig>;
   aliases: Record<string, CanonicalProfile>;
   projectOverrides: ProjectOverride[];
+  /** Retained in config v2 for compatibility; the router does not record prompts or outcomes. */
   telemetry: {
     enabled: boolean;
     file: string;
@@ -92,26 +92,6 @@ export interface Recommendation {
   evaluations: ProfileEvaluation[];
 }
 
-export type RouteOnceStatus =
-  | "shadow"
-  | "armed"
-  | "applied"
-  | "skipped"
-  | "restored"
-  | "restore-failed"
-  | "user-overrode";
-export type RouteOnceReason =
-  | "already-selected"
-  | "current-model-missing"
-  | "model-not-found"
-  | "no-recommendation"
-  | "provider-unavailable"
-  | "restore-failed"
-  | "selection-error"
-  | "selection-failed"
-  | "user-selected-model";
-
-/** Result of a real minimal inference probe against a profile's target. */
 export interface ProbeResult {
   profile: CanonicalProfile;
   modelId: string;
@@ -119,140 +99,12 @@ export interface ProbeResult {
   error?: string;
   latencyMs?: number;
   probedAt: string;
-  /** True when the target endpoint required no API key (valid keyless loopback). */
   keyless: boolean;
 }
 
-/** Durable setup state that gates active readiness. */
 export interface SetupState {
   version: 1;
   complete: boolean;
   lastProbedAt: string | null;
   probes: Partial<Record<CanonicalProfile, ProbeResult>>;
-}
-
-/** A typed node in the bounded coding-workflow graph. */
-export type WorkflowNodeKind =
-  | "clarify"
-  | "explore"
-  | "research"
-  | "plan"
-  | "plan-review"
-  | "implement"
-  | "review"
-  | "regression"
-  | "release-readiness";
-
-export type WorkflowNodeStatus = "pending" | "running" | "waiting-approval" | "approved" | "passed" | "failed" | "blocked" | "cancelled" | "skipped";
-
-export interface WorkflowNode {
-  id: string;
-  kind: WorkflowNodeKind;
-  profile: CanonicalProfile | null;
-  status: WorkflowNodeStatus;
-  dependsOn: string[];
-  createdAt: string;
-  startedAt: string | null;
-  finishedAt: string | null;
-  evidence: string[];
-  retryCount: number;
-  reopenCount: number;
-  error?: string;
-}
-
-/** Versioned approval envelope: fixed vs bounded-adaptive fields. */
-export interface ApprovalEnvelope {
-  version: number;
-  approvedAt: string;
-  scope: string;
-  acceptance: string[];
-  worktree: string;
-  writer: string;
-  authority: string[];
-  profile: CanonicalProfile | null;
-  maxFanout: number;
-  maxDepth: number;
-  maxRetries: number;
-  maxSwitches: number;
-  budgetTokens: number | null;
-}
-
-export type WorkflowStatus = "planning" | "awaiting-approval" | "running" | "paused" | "cancelled" | "blocked" | "complete" | "recovered";
-
-export interface PendingFlickerProjection {
-  kind: "approve" | "complete" | "cancel";
-  createdAt: string;
-  documentMarker: string | null;
-  documentWritten: boolean;
-}
-
-export interface WorkflowState {
-  id: string;
-  repo: string;
-  adapter: "session" | "flicker";
-  flickerTicketId: string | null;
-  status: WorkflowStatus;
-  nodes: WorkflowNode[];
-  envelope: ApprovalEnvelope | null;
-  mode: Mode;
-  createdAt: string;
-  updatedAt: string;
-  ownerSession: string;
-  ownerPid: number;
-  pendingProjection: PendingFlickerProjection | null;
-}
-
-/** A pin fixes a user choice until explicitly cleared. */
-export interface Pin {
-  scope: "session" | "repo";
-  key: string;
-  value: string;
-  createdAt: string;
-}
-
-export type TuningKind = "confidence-threshold" | "escalation" | "fanout" | "retry" | "dwell" | "circuit-breaker" | "node-sequence";
-
-export interface TuningProposal {
-  id: string;
-  createdAt: string;
-  kind: TuningKind;
-  scope: "global" | "project";
-  repo?: string;
-  description: string;
-  diff: Record<string, unknown>;
-  expectedImpact: string;
-  evidenceSample: number;
-  applied: boolean;
-  appliedAt: string | null;
-  rollback: Record<string, unknown> | null;
-  status: "proposed" | "approved" | "denied" | "applied" | "rolled-back";
-}
-
-/** Content-free outcome record used for learning. */
-export interface OutcomeRecord {
-  schemaVersion: 1;
-  timestamp: string;
-  workflowId: string | null;
-  nodeKind: WorkflowNodeKind | null;
-  profile: CanonicalProfile | null;
-  backend: "direct" | "delegated" | null;
-  routeConfidence: number;
-  phase: Phase;
-  risk: Risk;
-  accepted: boolean | null;
-  retries: number;
-  switches: number;
-  usage: AggregateUsage;
-  failure: string | null;
-  tuningVersion: number;
-}
-
-export type ActiveThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-
-export interface AggregateUsage {
-  inputTokens?: number;
-  outputTokens?: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  cost?: number;
 }

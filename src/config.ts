@@ -32,6 +32,16 @@ const LEGACY_ID_MAP: Record<string, CanonicalProfile> = {
   "pi-vision": "vision",
 };
 
+export const DEFAULT_PROFILE_MODELS: Record<CanonicalProfile, string> = {
+  fast: "fusion-explore",
+  code: "fusion-sidekick",
+  reason: "fusion-plan",
+  review: "fusion-reviewer",
+  research: "fusion-research",
+  vision: "fusion-vision",
+  design: "fusion-design",
+};
+
 export const DEFAULT_PROFILE_CAPABILITIES: Record<CanonicalProfile, Capabilities> = {
   fast: { tools: true, reasoning: false, image: false, structuredOutput: false, contextWindow: 32_000 },
   code: { tools: true, reasoning: true, image: false, structuredOutput: true, contextWindow: 64_000 },
@@ -290,6 +300,37 @@ export function parseConfig(value: unknown): { config: FusionConfig | null; diag
       },
     },
     diagnostics: [],
+  };
+}
+
+export function createDefaultConfig(overrides: Partial<Record<CanonicalProfile, string>> = {}): FusionConfig {
+  const profiles = Object.fromEntries(CANONICAL_PROFILES.map((profile) => [profile, {
+    modelId: overrides[profile] ?? DEFAULT_PROFILE_MODELS[profile],
+    capabilities: DEFAULT_PROFILE_CAPABILITIES[profile],
+  }])) as FusionConfig["profiles"];
+  return {
+    version: 2,
+    mode: "shadow",
+    provider: {
+      id: "9router",
+      baseUrl: "http://127.0.0.1:20128/v1",
+      apiKey: "$NINE_ROUTER_API_KEY",
+      timeoutMs: 15_000,
+    },
+    profiles,
+    aliases: { ...DEFAULT_ALIASES },
+    projectOverrides: [],
+    telemetry: { enabled: false, file: "pi-fusion.telemetry.jsonl", maxEntries: 200 },
+    tuning: {
+      enabled: false,
+      file: "pi-fusion.tuning.jsonl",
+      maxEntries: 200,
+      minEvidence: 5,
+      maxFanout: 4,
+      maxDepth: 2,
+      maxRetries: 3,
+      maxSwitches: 4,
+    },
   };
 }
 

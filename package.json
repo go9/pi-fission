@@ -1,7 +1,7 @@
 {
   "name": "pi-fusion",
   "version": "0.2.0",
-  "description": "Task-aware model routing and workflow control plane for Pi and 9Router (full-product v2, in development)",
+  "description": "Automatic semantic routing from Pi to seven configurable 9Router model groups",
   "type": "module",
   "license": "MIT",
   "keywords": [

@@ -74,12 +74,15 @@ export interface DelegateV2Input {
   model?: string;
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   timeoutMs?: number;
+  result?: { kind: "text" } | { kind: "structured"; schema: Record<string, unknown> };
 }
 
 export interface DelegateV2Result {
   ok: boolean;
   status?: string;
   output?: string;
+  value?: unknown;
+  accepted?: boolean;
   error?: string;
   usage?: Record<string, unknown>;
   duplicate?: boolean;
@@ -95,7 +98,6 @@ export async function delegateV2(input: DelegateV2Input): Promise<DelegateV2Resu
   const requestId = randomUUID();
   const model = input.model ?? effectiveProfileTarget(input.config, input.profile, input.repo);
   const request = {
-    version: SUBAGENT_DELEGATION_V2_PROTOCOL_VERSION,
     requestId,
     ownerRunId: input.ownerRunId,
     nodeId: input.nodeId,
@@ -106,7 +108,7 @@ export async function delegateV2(input: DelegateV2Input): Promise<DelegateV2Resu
     model,
     thinking: input.thinking,
     timeoutMs: input.timeoutMs,
-    result: { kind: "text" as const },
+    result: input.result ?? { kind: "text" as const },
   };
 
   return await new Promise<DelegateV2Result>((resolve) => {
@@ -117,21 +119,25 @@ export async function delegateV2(input: DelegateV2Input): Promise<DelegateV2Resu
     }, input.timeoutMs ?? 120_000);
 
     const onEvent = (event: unknown): void => {
-      const message = event as { type?: string; requestId?: string };
-      if (message?.type !== SUBAGENT_DELEGATION_RESPONSE_EVENT) return;
-      if (message.requestId !== requestId) return;
+      const message = event as { requestId?: string };
+      if (message?.requestId !== requestId) return;
       clearTimeout(timeout);
       bus?.off?.(SUBAGENT_DELEGATION_RESPONSE_EVENT, onEvent);
       const response = message as {
         status?: string;
-        output?: string;
+        result?: { kind?: string; text?: string; value?: unknown };
         error?: string;
         usage?: Record<string, unknown>;
       };
+      const value = response.result?.kind === "structured" ? response.result.value : undefined;
+      const output = response.result?.kind === "text" ? response.result.text : undefined;
+      const accepted = typeof value === "object" && value !== null && (value as { accepted?: unknown }).accepted === true;
       resolve({
-        ok: response.status === "success" || response.status === "accepted",
+        ok: response.status === "completed",
         status: response.status,
-        output: response.output,
+        output,
+        value,
+        accepted,
         error: response.error,
         usage: response.usage,
         duplicate: response.status === "duplicate_node",

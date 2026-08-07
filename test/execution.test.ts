@@ -60,11 +60,12 @@ describe("V2 delegation protocol producer", () => {
       captured = request;
       // Respond synchronously on the same bus.
       const response = {
-        type: SUBAGENT_DELEGATION_RESPONSE_EVENT,
         requestId: (request as { requestId: string }).requestId,
-        status: "success",
-        output: "fresh scout result",
-        usage: { tokens: 120 },
+        ownerRunId: "workflow-1",
+        nodeId: "n1",
+        status: "completed",
+        result: { kind: "structured", value: { accepted: true, summary: "fresh scout result" } },
+        usage: { input: 50, output: 20, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1, toolCalls: 0, durationMs: 10 },
       };
       runtime.bus.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, response);
     });
@@ -72,12 +73,14 @@ describe("V2 delegation protocol producer", () => {
       pi: runtime.api as never, config, profile: "research", repo: "/repo",
       nodeId: "n1", ownerRunId: "workflow-1", agent: "researcher",
       task: "research x", context: "fresh",
+      result: { kind: "structured", schema: { type: "object", required: ["accepted", "summary"], properties: { accepted: { type: "boolean" }, summary: { type: "string" } } } },
     });
     assert.equal(result.ok, true);
-    assert.equal(result.output, "fresh scout result");
-    assert.deepEqual(result.usage, { tokens: 120 });
+    assert.equal(result.accepted, true);
+    assert.deepEqual(result.value, { accepted: true, summary: "fresh scout result" });
+    assert.equal(result.usage?.input, 50);
     const request = captured as Record<string, unknown>;
-    assert.equal(request.version, 2);
+    assert.equal("version" in request, false, "V2 responder rejects a wire version field");
     assert.equal(request.ownerRunId, "workflow-1");
     assert.equal(request.nodeId, "n1");
     assert.equal(request.model, config.profiles.research.modelId);
@@ -87,8 +90,9 @@ describe("V2 delegation protocol producer", () => {
     const config = validConfig();
     const runtime = fakePi((request) => {
       runtime.bus.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
-        type: SUBAGENT_DELEGATION_RESPONSE_EVENT,
         requestId: (request as { requestId: string }).requestId,
+        ownerRunId: "w",
+        nodeId: "n1",
         status: "duplicate_node",
       });
     });

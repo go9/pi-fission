@@ -1598,13 +1598,41 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         pi, config: state.config.config, profile: node.profile, repo: workflow.repo,
         nodeId: node.id, ownerRunId: `workflow-${workflow.id}`,
         agent: nodeAgentName(node.kind),
-        task: `Perform the ${node.kind} stage of the approved Pi Fusion workflow in ${workflow.repo}.`,
+        task: `Perform the ${node.kind} stage of approved Pi Fusion workflow ${workflow.id} in ${workflow.repo}. Review this approved envelope: scope=${workflow.envelope?.scope ?? "missing"}; acceptance=${(workflow.envelope?.acceptance ?? []).join(",") || "missing"}; writer=${workflow.envelope?.writer ?? "missing"}; worktree=${workflow.envelope?.worktree ?? "missing"}; authority=${(workflow.envelope?.authority ?? []).join(",") || "none"}. Inspect repository evidence read-only. Return structured JSON with accepted=true only if the stage and envelope are coherent and safe, plus a concise summary. Do not mutate repository content.`,
         context: "fresh",
+        result: {
+          kind: "structured",
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["accepted", "summary"],
+            properties: { accepted: { type: "boolean" }, summary: { type: "string" } },
+          },
+        },
       });
-      if (result.ok) {
-        report(ctx, `fusion delegate: ${node.kind} -> ${nodeAgentName(node.kind)} ${result.status ?? "accepted"}${result.duplicate ? " (duplicate rejected)" : ""}`);
+      if (result.ok && result.accepted) {
+        workflow = {
+          ...workflow,
+          nodes: workflow.nodes.map((item) => item.id === node.id ? { ...item, evidence: [...new Set([...item.evidence, `delegation:${nodeAgentName(node.kind)}:accepted`])] } : item),
+        };
+        workflow = advanceWorkflow(workflow, node.id, "passed");
+        if (workflow.status === "complete" && workflow.adapter === "flicker") {
+          workflow = { ...workflow, pendingProjection: { kind: "complete", createdAt: new Date().toISOString(), documentMarker: `pi-fusion:${workflow.id}:complete:v${workflow.envelope?.version ?? 0}`, documentWritten: false } };
+          state.workflow = workflow;
+          await persistWorkflowState();
+          workflow = (await projectPendingFlicker(workflow)).workflow;
+        }
+        state.workflow = workflow;
+        await persistWorkflowState();
+        state.usage = mergeUsage(state.usage, sanitizeUsage(result.usage));
+        report(ctx, `fusion delegate: ${node.kind} -> ${nodeAgentName(node.kind)} completed · accepted`);
+      } else if (result.duplicate) {
+        report(ctx, `fusion delegate: ${node.kind} duplicate rejected`, "warning");
       } else {
-        report(ctx, `fusion delegate: ${node.kind} failed · ${result.error ?? result.status ?? "unknown"}`, "warning");
+        workflow = advanceWorkflow(workflow, node.id, "failed", result.error ?? result.status ?? "delegated acceptance missing");
+        state.workflow = workflow;
+        await persistWorkflowState();
+        report(ctx, `fusion delegate: ${node.kind} failed · ${result.error ?? result.status ?? "acceptance missing"}`, "warning");
       }
     },
   });

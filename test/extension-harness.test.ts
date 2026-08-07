@@ -415,18 +415,94 @@ describe("Pi Fusion one-shot active routing", () => {
       });
       assert.equal(fixture.runtime.thinkingLevel, "high", "native model switch clamps xhigh to target maximum");
       const target = fixture.runtime.selectionCalls[0];
+      (context as any).model = target;
       await emit(fixture.runtime.handlers, context, "thinking_level_select", {
         level: "high", previousLevel: "xhigh",
       });
       await emit(fixture.runtime.handlers, context, "model_select", {
         model: target, previousModel: previous, source: "set",
       });
-      (context as any).model = target;
 
       await emit(fixture.runtime.handlers, context, "agent_settled", {});
       assert.equal(fixture.runtime.selectionCalls[1], previous);
       assert.deepEqual(fixture.runtime.thinkingCalls, ["xhigh"], "one-shot restores but never chooses a new thinking level");
       assert.equal(fixture.runtime.thinkingLevel, "xhigh");
+    } finally {
+      await fixture.mock.close();
+    }
+  });
+
+  it("keeps a user-selected model while restoring the original thinking preference", async () => {
+    const fixture = await readyOneShotRuntime({
+      initialThinkingLevel: "xhigh",
+      clampThinkingForModel: (model, current) => model.provider === "9router" ? "high" : current,
+    });
+    const previous = { id: "xhigh-base", provider: "existing", name: "XHigh Base" };
+    const context = fakeContext(tmpdir(), [], "tui", previous, fixture.models, "xhigh");
+    try {
+      await fixture.runtime.commands.get("fusion-route-once")?.("", context);
+      await emit(fixture.runtime.handlers, context, "before_agent_start", {
+        prompt: "implement a small code fix", images: [],
+      });
+      const target = fixture.runtime.selectionCalls[0];
+      (context as any).model = target;
+      await emit(fixture.runtime.handlers, context, "thinking_level_select", {
+        level: "high", previousLevel: "xhigh",
+      });
+      await emit(fixture.runtime.handlers, context, "model_select", {
+        model: target, previousModel: previous, source: "set",
+      });
+
+      const userModel = { id: "user-final", provider: "user-provider", name: "User Final" };
+      await emit(fixture.runtime.handlers, context, "model_select", {
+        model: userModel, previousModel: target, source: "set",
+      });
+      (context as any).model = userModel;
+      await emit(fixture.runtime.handlers, context, "agent_settled", {});
+
+      assert.equal(fixture.runtime.selectionCalls.length, 1, "user model wins without stale old-model restoration");
+      assert.deepEqual(fixture.runtime.thinkingCalls, ["xhigh"]);
+      assert.equal(fixture.runtime.thinkingLevel, "xhigh", "model override does not erase the original preference");
+    } finally {
+      await fixture.mock.close();
+    }
+  });
+
+  it("keeps a user thinking selection made during the pre-model auth wait", async () => {
+    const selectionGate = deferred<boolean>();
+    const fixture = await readyOneShotRuntime({
+      initialThinkingLevel: "xhigh",
+      setModel: (_model, callIndex) => callIndex === 0 ? selectionGate.promise : true,
+      clampThinkingForModel: (model, current) => model.provider === "9router" ? "high" : current,
+    });
+    const previous = { id: "xhigh-base", provider: "existing", name: "XHigh Base" };
+    const context = fakeContext(tmpdir(), [], "tui", previous, fixture.models, "xhigh");
+    try {
+      await fixture.runtime.commands.get("fusion-route-once")?.("", context);
+      const routing = emit(fixture.runtime.handlers, context, "before_agent_start", {
+        prompt: "implement a small code fix", images: [],
+      });
+      await waitFor(() => fixture.runtime.selectionCalls.length === 1);
+
+      fixture.runtime.setThinkingLevelFromUser("medium");
+      await emit(fixture.runtime.handlers, context, "thinking_level_select", {
+        level: "medium", previousLevel: "xhigh",
+      });
+      selectionGate.resolve(true);
+      await routing;
+
+      const target = fixture.runtime.selectionCalls[0];
+      (context as any).model = target;
+      await emit(fixture.runtime.handlers, context, "model_select", {
+        model: target, previousModel: previous, source: "set",
+      });
+      await emit(fixture.runtime.handlers, context, "thinking_level_select", {
+        level: "high", previousLevel: "medium",
+      });
+      await emit(fixture.runtime.handlers, context, "agent_settled", {});
+
+      assert.equal(fixture.runtime.thinkingLevel, "medium", "pre-auth user intent remains final");
+      assert.deepEqual(fixture.runtime.thinkingCalls, ["medium"]);
     } finally {
       await fixture.mock.close();
     }
@@ -447,13 +523,13 @@ describe("Pi Fusion one-shot active routing", () => {
         prompt: "implement a small code fix", images: [],
       });
       const target = fixture.runtime.selectionCalls[0];
+      (context as any).model = target;
       await emit(fixture.runtime.handlers, context, "thinking_level_select", {
         level: "high", previousLevel: "xhigh",
       });
       await emit(fixture.runtime.handlers, context, "model_select", {
         model: target, previousModel: previous, source: "set",
       });
-      (context as any).model = target;
 
       const settling = emit(fixture.runtime.handlers, context, "agent_settled", {});
       await waitFor(() => fixture.runtime.selectionCalls.length === 2);
@@ -539,20 +615,27 @@ describe("Pi Fusion one-shot active routing", () => {
 
   it("reapplies a user model selected during delayed internal restoration", async () => {
     const restoreGate = deferred<boolean>();
-    const fixture = await readyOneShotRuntime((_model, callIndex) => callIndex === 1 ? restoreGate.promise : true);
+    const fixture = await readyOneShotRuntime({
+      initialThinkingLevel: "xhigh",
+      setModel: (_model, callIndex) => callIndex === 1 ? restoreGate.promise : true,
+      clampThinkingForModel: (model, current) => model.provider === "9router" ? "high" : current,
+    });
     const notifications: string[] = [];
     const previous = { id: "current", provider: "existing", name: "Existing" };
-    const context = fakeContext(tmpdir(), notifications, "tui", previous, fixture.models);
+    const context = fakeContext(tmpdir(), notifications, "tui", previous, fixture.models, "xhigh");
     try {
       await fixture.runtime.commands.get("fusion-route-once")?.("", context);
       await emit(fixture.runtime.handlers, context, "before_agent_start", {
         prompt: "implement a code fix", images: [],
       });
       const target = fixture.runtime.selectionCalls[0];
+      (context as any).model = target;
+      await emit(fixture.runtime.handlers, context, "thinking_level_select", {
+        level: "high", previousLevel: "xhigh",
+      });
       await emit(fixture.runtime.handlers, context, "model_select", {
         model: target, previousModel: previous, source: "set",
       });
-      (context as any).model = target;
       await emit(fixture.runtime.handlers, context, "turn_end", {
         turnIndex: 0, message: { usage: { input: 1, output: 1 } }, toolResults: [],
       });
@@ -570,6 +653,8 @@ describe("Pi Fusion one-shot active routing", () => {
       assert.equal(fixture.runtime.selectionCalls.length, 3);
       assert.equal(fixture.runtime.selectionCalls[1], previous, "internal restoration remains an explicit transaction");
       assert.equal(fixture.runtime.selectionCalls[2], userModel, "latest user selection is reapplied after delayed restore");
+      assert.deepEqual(fixture.runtime.thinkingCalls, ["xhigh"]);
+      assert.equal(fixture.runtime.thinkingLevel, "xhigh", "delayed user model keeps original thinking preference");
       await fixture.runtime.commands.get("fusion-status")?.("", context);
       assert.ok(notifications.some((line) => line.includes("one-shot user-overrode")));
       assert.ok(notifications.some((line) => line.includes("active Pi model: user-provider/user-final")));

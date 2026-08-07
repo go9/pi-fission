@@ -194,6 +194,9 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   let restorationInProgress = false;
   let restorationPromise: Promise<void> | null = null;
   let userSelectionDuringRestore: ActivePiModel | null = null;
+  /** Model we just restored, plus when; late set-source events matching it are our own restore, not overrides. */
+  let lastRestoreModel: ModelIdentity | null = null;
+  let lastRestoreAt = 0;
   let restoreThinkingLevel: PiThinkingLevel | null = null;
   let userThinkingLevel: PiThinkingLevel | null = null;
   let expectedInternalThinkingLevel: PiThinkingLevel | null = null;
@@ -311,6 +314,10 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       }
 
       if (modelReady && state.routingStatus !== "manual") {
+        lastRestoreModel = previous;
+        lastRestoreAt = Date.now();
+      }
+      if (modelReady && state.routingStatus !== "manual") {
         setActiveModel(previous ? { provider: previous.provider, id: previous.id } : null);
       }
       if (modelReady) {
@@ -392,6 +399,8 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
 
   pi.on("before_agent_start", async (event, ctx) => {
     promptSeen = true;
+    lastRestoreModel = null;
+    lastRestoreAt = 0;
     const previousModel = modelIdentity(ctx);
     setActiveModel(previousModel);
     state.classification = classify({ text: event.prompt, imageCount: event.images?.length ?? 0 });
@@ -476,6 +485,12 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       expectedInternalSelection = null;
     } else if (restorationInProgress) {
       userSelectionDuringRestore = event.model;
+    } else if (lastRestoreModel
+      && selected.provider === lastRestoreModel.provider
+      && selected.id === lastRestoreModel.id
+      && Date.now() - lastRestoreAt < 3000) {
+      // Late set-source event from our own restore: not a user override.
+      setActiveModel(selected);
     } else if (event.source === "restore") {
       // Pi re-applying a model (our own restore or a session restore): never a user override.
       setActiveModel(selected);

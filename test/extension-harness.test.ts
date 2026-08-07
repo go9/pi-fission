@@ -290,6 +290,27 @@ describe("router-only Pi Fusion extension", () => {
     }
   });
 
+  it("ignores a late set-source event for the restored model so routing continues", async () => {
+    const saved = await fixture();
+    const runtime = fakeApi();
+    const target = { provider: "9router", id: saved.config.profiles.code.modelId };
+    const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target]);
+    try {
+      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
+      assert.equal(runtime.selectionCalls.length, 1);
+      // Turn settles; Fusion restores the previous model (second selection).
+      await emit(runtime, context, "agent_settled", {});
+      assert.equal(runtime.selectionCalls.length, 2);
+      // Pi emits a late set-source event for the restored model after the restore finished.
+      await emit(runtime, context, "model_select", { model: { provider: "existing", id: "original" }, previousModel: target, source: "set" });
+      await emit(runtime, context, "before_agent_start", { prompt: "Implement another helper", images: [] });
+      assert.equal(runtime.selectionCalls.length, 3, "late restore set event must not be treated as a manual override");
+    } finally {
+      await saved.mock.close();
+    }
+  });
+
   it("parses mode arguments without exposing workflow state", async () => {
     const saved = await fixture();
     const runtime = fakeApi();

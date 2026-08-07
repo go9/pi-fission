@@ -217,7 +217,7 @@ describe("Pi observer extension shadow mode", () => {
     }
   });
 
-  it("registers a keyless loopback provider with only a non-secret local sentinel", async () => {
+  it("registers a keyless loopback provider with a local sentinel and no authorization header", async () => {
     const mock = await listen((request, response) => {
       assert.equal(request.headers.authorization, undefined);
       response.setHeader("content-type", "application/json");
@@ -234,6 +234,31 @@ describe("Pi observer extension shadow mode", () => {
       await createFusionExtension(runtime.api, { configPath, env: {} });
       assert.equal(runtime.providers.length, 1);
       assert.equal(runtime.providers[0]?.provider.apiKey, "local");
+      assert.equal(runtime.providers[0]?.provider.authHeader, false);
+    } finally {
+      await mock.close();
+    }
+  });
+
+  it("registers a configured-key provider with authorization enabled", async () => {
+    const mock = await listen((request, response) => {
+      assert.equal(request.headers.authorization, "Bearer CREDENTIAL_SENTINEL");
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ data: [
+        { id: "pi-fast" }, { id: "pi-code" }, { id: "pi-reason" },
+        { id: "pi-review" }, { id: "pi-research" }, { id: "pi-vision" },
+      ] }));
+    });
+    const config = validConfig({ provider: { ...validConfig().provider, baseUrl: mock.baseUrl } });
+    const { path: configPath } = await writeConfig(config);
+    const runtime = fakeApi();
+    try {
+      await createFusionExtension(runtime.api, {
+        configPath,
+        env: { TEST_9ROUTER_KEY: "CREDENTIAL_SENTINEL" },
+      });
+      assert.equal(runtime.providers.length, 1);
+      assert.equal(runtime.providers[0]?.provider.apiKey, "$TEST_9ROUTER_KEY");
       assert.equal(runtime.providers[0]?.provider.authHeader, true);
     } finally {
       await mock.close();

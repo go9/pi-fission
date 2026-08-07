@@ -108,7 +108,7 @@ function registerProvider(pi: ExtensionAPI, config: FusionConfig, discovery: Dis
     name: "9Router (Pi Fusion)",
     baseUrl: config.provider.baseUrl,
     apiKey: config.provider.apiKey ?? "local",
-    authHeader: true,
+    authHeader: config.provider.apiKey !== undefined,
     api: "openai-completions",
     models,
   });

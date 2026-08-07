@@ -118,7 +118,7 @@ export async function runProbe(
       body: JSON.stringify({
         model: target,
         messages: [{ role: "user", content: PROBE_PROMPT }],
-        max_tokens: 16,
+        max_tokens: 256,
         stream: false,
       }),
       signal: AbortSignal.timeout(timeoutMs),

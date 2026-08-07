@@ -203,6 +203,8 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     level: PiThinkingLevel;
   }> = [];
   let manualOverride = false;
+  /** Whether a real user prompt has begun; selections before that are startup defaults, not overrides. */
+  let promptSeen = false;
 
   const setActiveModel = (identity: ModelIdentity | null): void => {
     state.activeModel = displayModel(identity);
@@ -348,6 +350,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
+    promptSeen = true;
     setActiveModel(modelIdentity(ctx));
     state.classification = classify({ text: event.prompt, imageCount: event.images?.length ?? 0 });
     state.routingReason = null;
@@ -424,13 +427,16 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       expectedInternalSelection = null;
     } else if (restorationInProgress) {
       userSelectionDuringRestore = event.model;
-    } else {
+    } else if (promptSeen) {
       manualOverride = true;
       routeActive = false;
       routeChangedModel = false;
       restoreModel = null;
       state.routingStatus = "manual";
       state.routingReason = "user selected a model";
+      setActiveModel(selected);
+    } else {
+      // Session-start default or idle provider fallback: not a user override.
       setActiveModel(selected);
     }
     updateFooter(state, ctx);

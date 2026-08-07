@@ -167,12 +167,32 @@ describe("router-only Pi Fusion extension", () => {
     const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target]);
     try {
       await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      // First prompt starts the session and routes normally.
+      await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
+      assert.equal(runtime.selectionCalls.length, 1);
+      // A mid-session manual selection pauses automatic routing.
       await emit(runtime, context, "model_select", { model: { provider: "existing", id: "manual" } });
       await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
-      assert.equal(runtime.selectionCalls.length, 0);
+      assert.equal(runtime.selectionCalls.length, 1, "manual selection must pause routing");
       await runtime.commands.get("fusion-mode")?.("active", context);
       await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
-      assert.deepEqual(runtime.selectionCalls[0], target);
+      assert.equal(runtime.selectionCalls.length, 2, "re-enabling resumes routing");
+    } finally {
+      await saved.mock.close();
+    }
+  });
+
+  it("does not treat session-start model selection as a user override", async () => {
+    const saved = await fixture();
+    const runtime = fakeApi();
+    const target = { provider: "9router", id: saved.config.profiles.code.modelId };
+    const context = fakeContext(tmpdir(), [], { provider: "opencode-go", id: "deepseek-v4-flash" }, [target]);
+    try {
+      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      // Session startup selects the default model before any prompt.
+      await emit(runtime, context, "model_select", { model: { provider: "opencode-go", id: "deepseek-v4-flash" } });
+      await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
+      assert.deepEqual(runtime.selectionCalls[0], target, "auto-routing must still switch to the routed group");
     } finally {
       await saved.mock.close();
     }

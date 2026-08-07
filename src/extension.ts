@@ -207,6 +207,13 @@ function show(
   stderr(`[pi-fusion] ${message}\n`);
 }
 
+/** Normalize Pi command args (string[] or a single string) to a first arg. */
+function firstArg(args: string | string[] | undefined): string | undefined {
+  if (Array.isArray(args)) return args[0];
+  if (typeof args === "string") return args.trim() || undefined;
+  return undefined;
+}
+
 export async function createFusionExtension(pi: ExtensionAPI, options: FusionExtensionOptions = {}): Promise<void> {
   const environment = options.env ?? process.env;
   const configPath = options.configPath ?? defaultConfigPath(environment);
@@ -772,7 +779,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         report(ctx, "fusion mode: unconfigured · run /fusion-setup");
         return;
       }
-      const requested = args?.[0] as string | undefined;
+      const requested = firstArg(args);
       if (!requested) {
         report(ctx, `fusion mode: ${state.config.config.mode}`);
         return;
@@ -912,7 +919,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   pi.registerCommand("fusion-tune-approve", {
     description: "Approve a tuning proposal (applies to future workflows only)",
     handler: async (args, ctx) => {
-      const id = args?.[0] as string | undefined;
+      const id = firstArg(args);
       const proposals = await loadProposals(configPath);
       const proposal = proposals.find((item) => item.id.startsWith(id ?? "") && item.status === "proposed");
       if (!proposal) { report(ctx, "fusion tune: no proposed proposal matches", "warning"); return; }
@@ -924,7 +931,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   pi.registerCommand("fusion-tune-deny", {
     description: "Deny a tuning proposal",
     handler: async (args, ctx) => {
-      const id = args?.[0] as string | undefined;
+      const id = firstArg(args);
       const proposals = await loadProposals(configPath);
       const proposal = proposals.find((item) => item.id.startsWith(id ?? "") && item.status === "proposed");
       if (!proposal) { report(ctx, "fusion tune: no proposed proposal matches", "warning"); return; }
@@ -936,7 +943,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   pi.registerCommand("fusion-tune-rollback", {
     description: "Roll back an applied tuning proposal",
     handler: async (args, ctx) => {
-      const id = args?.[0] as string | undefined;
+      const id = firstArg(args);
       const proposals = await loadProposals(configPath);
       const proposal = proposals.find((item) => item.id.startsWith(id ?? "") && item.status === "applied");
       if (!proposal) { report(ctx, "fusion tune: no applied proposal matches", "warning"); return; }

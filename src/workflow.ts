@@ -90,6 +90,8 @@ export function createWorkflowState(input: {
     startedAt: null,
     finishedAt: null,
     evidence: [],
+    retryCount: 0,
+    reopenCount: 0,
   }));
   return {
     id: randomUUID(),
@@ -132,11 +134,14 @@ export function advanceWorkflow(workflow: WorkflowState, nodeId: string, status:
   if (!node) return workflow;
   let resolvedStatus = status;
   let resolvedError = error;
-  if (status === "passed" && node.kind === "implement" && !node.evidence.some((item) => /^tool:(?:write|edit|bash):ok$/.test(item))) {
+  if (status === "passed" && node.kind === "implement" && (
+    !node.evidence.some((item) => /^mutation:(?:write|edit):in-worktree$/.test(item))
+    || !node.evidence.includes("git:commit:ok")
+  )) {
     resolvedStatus = "failed";
-    resolvedError = "missing implementation evidence";
+    resolvedError = "missing in-worktree mutation or local commit evidence";
   }
-  if (status === "passed" && node.kind === "regression" && !node.evidence.some((item) => /^tool:(?:read|bash):ok$/.test(item))) {
+  if (status === "passed" && node.kind === "regression" && !node.evidence.includes("verification:bash:ok")) {
     resolvedStatus = "failed";
     resolvedError = "missing regression evidence";
   }
@@ -189,7 +194,7 @@ export function retryBlockedWorkflow(workflow: WorkflowState, maxRetries: number
   if (workflow.status !== "blocked") return workflow;
   const failed = workflow.nodes.find((node) => node.status === "failed" || node.status === "blocked");
   if (!failed) return workflow;
-  const attempts = failed.evidence.filter((item) => item.startsWith("retry:")).length;
+  const attempts = failed.retryCount ?? 0;
   if (attempts >= Math.max(0, maxRetries)) return workflow;
   const timestamp = (now ?? (() => new Date()))().toISOString();
   return {
@@ -203,7 +208,8 @@ export function retryBlockedWorkflow(workflow: WorkflowState, maxRetries: number
           startedAt: timestamp,
           finishedAt: null,
           error: undefined,
-          evidence: [...node.evidence, `retry:${attempts + 1}`],
+          retryCount: attempts + 1,
+          evidence: [],
         }
       : node),
   };
@@ -212,10 +218,11 @@ export function retryBlockedWorkflow(workflow: WorkflowState, maxRetries: number
 /** Reopen an upstream node after review/regression invalidates downstream evidence. */
 export function reopenWorkflowAt(workflow: WorkflowState, kind: WorkflowNodeKind, maxRetries: number, now?: () => Date): WorkflowState {
   if (workflow.status !== "blocked") return workflow;
+  const failedIndex = workflow.nodes.findIndex((node) => node.status === "failed" || node.status === "blocked");
   const index = workflow.nodes.findIndex((node) => node.kind === kind);
-  if (index < 0) return workflow;
+  if (failedIndex < 0 || index < 0 || index > failedIndex) return workflow;
   const target = workflow.nodes[index]!;
-  const attempts = target.evidence.filter((item) => item.startsWith("reopen:")).length;
+  const attempts = target.reopenCount ?? 0;
   if (attempts >= Math.max(0, maxRetries)) return workflow;
   const timestamp = (now ?? (() => new Date()))().toISOString();
   return {
@@ -231,7 +238,8 @@ export function reopenWorkflowAt(workflow: WorkflowState, kind: WorkflowNodeKind
           startedAt: timestamp,
           finishedAt: null,
           error: undefined,
-          evidence: [...node.evidence, `reopen:${attempts + 1}`],
+          reopenCount: attempts + 1,
+          evidence: [],
         };
       }
       return {

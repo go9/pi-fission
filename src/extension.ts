@@ -1,5 +1,6 @@
 import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isAbsolute, relative, resolve } from "node:path";
 import {
   defaultConfigPath,
   loadConfig,
@@ -115,7 +116,76 @@ const READ_ONLY_TOOLS = new Set([
 ]);
 const WRITER_TOOLS = new Set([...READ_ONLY_TOOLS, "bash", "edit", "write"]);
 const WRITER_NODE_KINDS = new Set(["implement", "regression"]);
-const GATED_SHELL_ACTION = /(?:\bgit\s+(?:push|merge|reset\s+--hard|clean\s+-[^\s]*f)|\bgh\s+(?:pr\s+(?:create|merge)|release)|\b(?:npm|pnpm)\s+publish|\byarn\s+npm\s+publish|\bmix\s+hex\.publish|\b(?:fly|flicker)\s+deploy|\bdocker\s+push|\bkubectl\s+(?:apply|delete|rollout\s+restart)|\bhelm\s+(?:install|upgrade|uninstall)|\bterraform\s+(?:apply|destroy)|\brm\s+-[^\s]*r[^\s]*f|\bflicker\s+ticket\s+complete)\b/i;
+
+type AllowedShellKind = "local" | "commit" | "verification";
+
+function shellWords(command: string): string[] | null {
+  const words: string[] = [];
+  let word = "";
+  let quote: "single" | "double" | null = null;
+  let escaped = false;
+  const finish = () => { if (word) { words.push(word); word = ""; } };
+  for (const char of command.trim()) {
+    if (escaped) { word += char; escaped = false; continue; }
+    if (char === "\\" && quote !== "single") { escaped = true; continue; }
+    if (char === "'" && quote !== "double") { quote = quote === "single" ? null : "single"; continue; }
+    if (char === '"' && quote !== "single") { quote = quote === "double" ? null : "double"; continue; }
+    if (quote !== "single" && /[;$`|&<>\n\r(){}]/.test(char)) return null;
+    if (!quote && /\s/.test(char)) { finish(); continue; }
+    word += char;
+  }
+  if (quote || escaped) return null;
+  finish();
+  return words.length > 0 ? words : null;
+}
+
+function allowedShellCommand(command: string): AllowedShellKind | null {
+  const raw = shellWords(command);
+  if (!raw) return null;
+  const words = [...raw];
+  while (words[0] && /^[A-Za-z_][A-Za-z0-9_]*=[^=]*$/.test(words[0])) words.shift();
+  const executable = words.shift();
+  if (!executable || executable.includes("/")) return null;
+  const verb = words[0] ?? "";
+  const allowVerb = (verbs: string[]) => verbs.includes(verb);
+
+  if (executable === "git") {
+    if (allowVerb(["status", "diff", "log", "show", "rev-parse"])) return "verification";
+    if (verb === "add") return "local";
+    if (verb === "commit") return "commit";
+    return null;
+  }
+  if (executable === "npm" || executable === "pnpm") {
+    if (verb === "test" || (verb === "run" && /^(?:test|check|lint|format|build|typecheck)(?::[A-Za-z0-9_.-]+)?$/.test(words[1] ?? ""))) return "verification";
+    if (allowVerb(["install", "ci", "pack", "audit"])) return "local";
+    return null;
+  }
+  if (executable === "mix") {
+    if (allowVerb(["test", "compile", "format"])) return "verification";
+    if (verb === "deps.get") return "local";
+    return null;
+  }
+  if (executable === "cargo") return allowVerb(["test", "check", "build", "fmt", "clippy"]) ? "verification" : null;
+  if (executable === "go") return allowVerb(["test", "build", "fmt", "vet"]) ? "verification" : null;
+  if (executable === "make") return words.length > 0 && words.every((item) => /^(?:test|check|lint|format|build|typecheck)$/.test(item)) ? "verification" : null;
+  if (["grep", "test", "diff", "cmp", "wc"].includes(executable)) return "verification";
+  if (["pwd", "ls", "cat", "head", "tail", "sort", "uniq"].includes(executable)) return "local";
+  if (executable === "find" && !words.some((item) => ["-delete", "-exec", "-execdir", "-ok", "-okdir"].includes(item))) return "local";
+  return null;
+}
+
+function inputPath(input: unknown): string | null {
+  return typeof input === "object" && input !== null && "path" in input && typeof (input as { path?: unknown }).path === "string"
+    ? (input as { path: string }).path
+    : null;
+}
+
+function pathWithinWorktree(workflow: WorkflowState, path: string): boolean {
+  const root = resolve(workflow.envelope?.worktree ?? workflow.repo);
+  const target = isAbsolute(path) ? resolve(path) : resolve(root, path);
+  const rel = relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
 
 function flickerTaskContractBody(workflow: WorkflowState): string {
   const sequence = workflow.nodes.map((node) => node.kind).join(" → ");
@@ -149,15 +219,43 @@ function toolBlockReason(options: {
   if (!WRITER_TOOLS.has(options.toolName)) {
     return `Tool ${options.toolName} is outside the approved writer tool set`;
   }
+  if (options.toolName === "edit" || options.toolName === "write") {
+    const path = inputPath(options.input);
+    if (!path || !pathWithinWorktree(options.workflow, path)) return "Write/edit path is outside the approved worktree";
+  }
   if (options.toolName === "bash") {
     const command = typeof options.input === "object" && options.input !== null && "command" in options.input
       ? String((options.input as { command?: unknown }).command ?? "")
       : "";
-    if (GATED_SHELL_ACTION.test(command)) {
-      return "Remote, release, destructive, and completion actions require separate explicit authority";
+    if (!allowedShellCommand(command)) {
+      return "Shell command is outside the approved local command allowlist; remote, release, destructive, chained, and interpreter commands require separate authority";
     }
   }
   return null;
+}
+
+function evidenceForTool(workflow: WorkflowState | null, toolName: string, input: unknown): string[] {
+  if (!workflow) return [];
+  if ((toolName === "write" || toolName === "edit")) {
+    const path = inputPath(input);
+    return path && pathWithinWorktree(workflow, path) ? [`mutation:${toolName}:in-worktree`] : [];
+  }
+  if (toolName === "bash") {
+    const command = typeof input === "object" && input !== null && "command" in input
+      ? String((input as { command?: unknown }).command ?? "")
+      : "";
+    const kind = allowedShellCommand(command);
+    if (kind === "commit") return ["git:commit:ok"];
+    if (kind === "verification") return ["verification:bash:ok"];
+    return kind === "local" ? ["tool:bash:ok"] : [];
+  }
+  if (toolName === "read") return ["tool:read:ok"];
+  return [];
+}
+
+function processIsAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
 function modelIdentity(ctx: ExtensionContext): ModelIdentity | null {
@@ -579,6 +677,11 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     const repo = ctx.cwd;
     const foreign = await foreignOwnerForRepo(repo, getSessionId(ctx), storePath);
     state.foreignOwner = foreign !== null;
+    if (foreign) {
+      workflow = null;
+      state.workflow = null;
+      return;
+    }
     const existing = await activeWorkflowForRepo(repo, getSessionId(ctx), storePath);
     if (existing) {
       workflow = existing;
@@ -590,6 +693,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     // the plan itself and are permitted before mutation approval).
     let adapter: "session" | "flicker" = "session";
     let flickerTicketId: string | null = null;
+    let flickerCreationError: string | null = null;
     try {
       const resolution = await resolveFlickerProject(repo, { env: environment });
       if (resolution.ok && resolution.projectSlug) {
@@ -601,6 +705,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
           { env: environment },
         );
         flickerTicketId = ticket.ok ? ticket.ticketId : null;
+        if (!ticket.ok || !ticket.ticketId) flickerCreationError = ticket.error ?? "Flicker ticket creation failed";
       }
     } catch {
       // Flicker unavailable is non-fatal; the workflow stays session-adapter.
@@ -614,6 +719,17 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       ownerSession: getSessionId(ctx),
       ownerPid: process.pid,
     });
+    if (flickerCreationError) {
+      const first = workflow.nodes[0];
+      workflow = {
+        ...workflow,
+        status: "blocked",
+        nodes: first
+          ? workflow.nodes.map((node) => node.id === first.id ? { ...node, status: "failed", finishedAt: new Date().toISOString(), error: flickerCreationError } : node)
+          : workflow.nodes,
+        updatedAt: new Date().toISOString(),
+      };
+    }
     state.workflow = workflow;
     await upsertWorkflow(workflow, storePath);
   };
@@ -780,8 +896,8 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     state.usage = mergeUsage(state.usage, sanitizeUsage(event.usage));
     if (event.isError) {
       state.outcome = "error";
-    } else if (["read", "bash", "edit", "write"].includes(event.toolName)) {
-      turnEvidence.add(`tool:${event.toolName}:ok`);
+    } else {
+      for (const evidence of evidenceForTool(workflow, event.toolName, event.input)) turnEvidence.add(evidence);
     }
     updateFooter(state, ctx);
   });
@@ -891,18 +1007,24 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         await persistWorkflowState();
       }
       if ((workflow.status === "complete" || workflow.status === "blocked") && workflow.adapter === "flicker" && workflow.flickerTicketId) {
-        const sync = await syncFlickerStatus(workflow.flickerTicketId, workflow.status, { env: environment });
+        const written = workflow.status === "complete"
+          ? await writeFlickerDocument(workflow.flickerTicketId, "implementation_notes", "Pi Fusion implementation evidence", flickerImplementationNotesBody(workflow), { env: environment })
+          : { ok: true as const };
+        const sync = written.ok
+          ? await syncFlickerStatus(workflow.flickerTicketId, workflow.status, { env: environment })
+          : { ok: false, error: written.error };
         if (!sync.ok) {
-          workflow = { ...workflow, status: "blocked", updatedAt: new Date().toISOString() };
+          const failedAt = new Date().toISOString();
+          workflow = {
+            ...workflow,
+            status: "blocked",
+            updatedAt: failedAt,
+            nodes: node
+              ? workflow.nodes.map((item) => item.id === node.id ? { ...item, status: "failed" as const, finishedAt: failedAt, error: `Flicker projection failed: ${sync.error ?? "unknown error"}` } : item)
+              : workflow.nodes,
+          };
           state.workflow = workflow;
           await persistWorkflowState();
-        } else if (workflow.status === "complete") {
-          const written = await writeFlickerDocument(workflow.flickerTicketId, "implementation_notes", "Pi Fusion implementation evidence", flickerImplementationNotesBody(workflow), { env: environment });
-          if (!written.ok) {
-            workflow = { ...workflow, status: "blocked", updatedAt: new Date().toISOString() };
-            state.workflow = workflow;
-            await persistWorkflowState();
-          }
         }
       }
       await recordActiveOutcome(node, settledOutcome);
@@ -1050,15 +1172,18 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       state.workflow = workflow;
       await persistWorkflowState();
       if (workflow.adapter === "flicker" && workflow.flickerTicketId) {
-        const sync = await syncFlickerStatus(workflow.flickerTicketId, workflow.status, { env: environment });
-        const written = sync.ok
-          ? await writeFlickerDocument(workflow.flickerTicketId, "task_contract", "Pi Fusion task contract", flickerTaskContractBody(workflow), { env: environment })
-          : { ok: false, error: sync.error };
-        if (!written.ok) {
-          workflow = { ...workflow, status: "blocked", updatedAt: new Date().toISOString() };
+        const written = await writeFlickerDocument(workflow.flickerTicketId, "task_contract", "Pi Fusion task contract", flickerTaskContractBody(workflow), { env: environment });
+        const sync = written.ok
+          ? await syncFlickerStatus(workflow.flickerTicketId, workflow.status, { env: environment })
+          : { ok: false, error: written.error };
+        if (!sync.ok) {
+          const node = runningNode(workflow);
+          workflow = node
+            ? advanceWorkflow(workflow, node.id, "failed", `Flicker projection failed: ${sync.error ?? "unknown error"}`)
+            : { ...workflow, status: "blocked", updatedAt: new Date().toISOString() };
           state.workflow = workflow;
           await persistWorkflowState();
-          report(ctx, `fusion plan: Flicker projection blocked · ${written.error ?? "unknown error"}`, "warning");
+          report(ctx, `fusion plan: Flicker projection blocked · ${sync.error ?? "unknown error"}`, "warning");
           return;
         }
       }
@@ -1083,12 +1208,23 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   pi.registerCommand("fusion-resume", {
     description: "Resume a paused workflow or retry a blocked node within its approved budget",
     handler: async (args, ctx) => {
+      const requested = firstArg(args);
+      if (!workflow && requested === "takeover") {
+        const foreign = await foreignOwnerForRepo(ctx.cwd, getSessionId(ctx), storePath);
+        if (!foreign) { report(ctx, "fusion resume: no foreign workflow to take over", "warning"); return; }
+        if (processIsAlive(foreign.ownerPid)) { report(ctx, "fusion resume: foreign owner is still active; takeover refused", "warning"); return; }
+        workflow = { ...foreign, ownerSession: getSessionId(ctx), ownerPid: process.pid, updatedAt: new Date().toISOString() };
+        state.workflow = workflow;
+        state.foreignOwner = false;
+        await persistWorkflowState();
+        report(ctx, "fusion resume: stale workflow ownership reconciled; run /fusion-resume to continue");
+        return;
+      }
       if (!workflow) { report(ctx, "fusion resume: no active workflow", "warning"); return; }
       const previousStatus = workflow.status;
       let reopenedKind: WorkflowNode["kind"] | null = null;
       if (previousStatus === "blocked") {
         const maxRetries = workflow.envelope?.maxRetries ?? 0;
-        const requested = firstArg(args);
         if (requested && workflow.nodes.some((node) => node.kind === requested)) {
           reopenedKind = requested as WorkflowNode["kind"];
           workflow = reopenWorkflowAt(workflow, reopenedKind, maxRetries);

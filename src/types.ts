@@ -155,6 +155,8 @@ export interface WorkflowNode {
   startedAt: string | null;
   finishedAt: string | null;
   evidence: string[];
+  retryCount: number;
+  reopenCount: number;
   error?: string;
 }
 

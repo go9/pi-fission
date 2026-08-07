@@ -5,7 +5,7 @@ import type { FusionConfig, WorkflowNode } from "../src/types.ts";
 import { validConfig } from "../test-support/helpers.ts";
 
 function node(kind: WorkflowNode["kind"]): WorkflowNode {
-  return { id: "n1", kind, profile: "code", status: "running", dependsOn: [], createdAt: "x", startedAt: null, finishedAt: null, evidence: [] };
+  return { id: "n1", kind, profile: "code", status: "running", dependsOn: [], createdAt: "x", startedAt: null, finishedAt: null, evidence: [], retryCount: 0, reopenCount: 0 };
 }
 
 function fakePi(respond: (request: unknown) => void) {

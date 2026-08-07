@@ -95,12 +95,12 @@ describe("workflow planning and runtime", () => {
     assert.equal(implement.kind, "implement");
     workflow = advanceWorkflow(workflow, implement.id, "passed");
     assert.equal(workflow.status, "blocked");
-    assert.equal(workflow.nodes.find((node) => node.id === implement.id)?.error, "missing implementation evidence");
+    assert.equal(workflow.nodes.find((node) => node.id === implement.id)?.error, "missing in-worktree mutation or local commit evidence");
 
     workflow = retryBlockedWorkflow(workflow, 3);
     workflow = {
       ...workflow,
-      nodes: workflow.nodes.map((node) => node.id === implement.id ? { ...node, evidence: [...node.evidence, "tool:write:ok"] } : node),
+      nodes: workflow.nodes.map((node) => node.id === implement.id ? { ...node, evidence: ["mutation:write:in-worktree", "git:commit:ok"] } : node),
     };
     workflow = advanceWorkflow(workflow, implement.id, "passed");
     assert.equal(workflow.nodes.find((node) => node.id === implement.id)?.status, "passed");
@@ -125,14 +125,16 @@ describe("workflow planning and runtime", () => {
     workflow = advanceWorkflow(workflow, workflow.nodes.find((node) => node.status === "running")!.id, "passed");
     workflow = advanceWorkflow(workflow, workflow.nodes.find((node) => node.status === "running")!.id, "passed");
     const implement = workflow.nodes.find((node) => node.status === "running")!;
-    workflow = { ...workflow, nodes: workflow.nodes.map((node) => node.id === implement.id ? { ...node, evidence: ["tool:write:ok"] } : node) };
+    workflow = { ...workflow, nodes: workflow.nodes.map((node) => node.id === implement.id ? { ...node, evidence: ["mutation:write:in-worktree", "git:commit:ok"] } : node) };
     workflow = advanceWorkflow(workflow, implement.id, "passed");
     const review = workflow.nodes.find((node) => node.status === "running")!;
     workflow = advanceWorkflow(workflow, review.id, "failed", "missing file");
+    assert.equal(reopenWorkflowAt(workflow, "regression", 2), workflow, "cannot bypass an upstream failure by reopening a downstream node");
     workflow = reopenWorkflowAt(workflow, "implement", 2);
     assert.equal(workflow.status, "running");
     assert.equal(workflow.nodes.find((node) => node.kind === "implement")?.status, "running");
-    assert.match(workflow.nodes.find((node) => node.kind === "implement")?.evidence.at(-1) ?? "", /^reopen:1$/);
+    assert.equal(workflow.nodes.find((node) => node.kind === "implement")?.reopenCount, 1);
+    assert.deepEqual(workflow.nodes.find((node) => node.kind === "implement")?.evidence, []);
     assert.ok(workflow.nodes.filter((node) => ["review", "regression"].includes(node.kind)).every((node) => node.status === "pending" && node.evidence.length === 0));
   });
 
@@ -151,7 +153,8 @@ describe("workflow planning and runtime", () => {
     workflow = retryBlockedWorkflow(workflow, 1, () => new Date("2026-01-01T00:00:00Z"));
     assert.equal(workflow.status, "running");
     assert.equal(workflow.nodes.find((node) => node.id === first.id)?.status, "running");
-    assert.deepEqual(workflow.nodes.find((node) => node.id === first.id)?.evidence, ["retry:1"]);
+    assert.equal(workflow.nodes.find((node) => node.id === first.id)?.retryCount, 1);
+    assert.deepEqual(workflow.nodes.find((node) => node.id === first.id)?.evidence, []);
     workflow = advanceWorkflow(workflow, first.id, "failed", "still failing");
     assert.equal(retryBlockedWorkflow(workflow, 1), workflow, "exhausted retry returns the unchanged blocked workflow");
   });

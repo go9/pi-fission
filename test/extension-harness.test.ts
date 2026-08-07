@@ -148,14 +148,13 @@ describe("Pi observer extension shadow mode", () => {
       assert.equal(registeredCode.contextWindow, 32_000, "known discovered context constrains registration");
       assert.equal(registeredCode.reasoning, true, "unknown discovered reasoning retains explicit configured floor");
       const expectedCommands = [
-        "fusion-cancel", "fusion-config", "fusion-delegate", "fusion-explain", "fusion-history",
-        "fusion-mode", "fusion-pause", "fusion-plan", "fusion-proposals", "fusion-resume",
         "fusion", "fusion-cancel", "fusion-config", "fusion-dashboard-close", "fusion-delegate",
         "fusion-explain", "fusion-history", "fusion-mode", "fusion-pause", "fusion-plan",
         "fusion-proposals", "fusion-resume", "fusion-route-once", "fusion-setup",
         "fusion-setup-status", "fusion-status", "fusion-tune-approve", "fusion-tune-deny",
         "fusion-tune-propose", "fusion-tune-rollback", "fusion-workflow",
-      ].sort();
+      ].sort((a, b) => a.localeCompare(b));
+
       assert.deepEqual([...runtime.commands.keys()].sort(), expectedCommands);
       for (const event of ["agent_settled", "before_agent_start", "tool_result", "turn_end", "model_select", "thinking_level_select", "after_provider_response", "session_start", "session_shutdown"]) {
         assert.ok(runtime.handlers.has(event), `registered ${event}`);

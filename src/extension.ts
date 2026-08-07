@@ -9,6 +9,7 @@ import {
   effectiveProfileTarget,
   type ConfigResult,
 } from "./config.ts";
+import { workflowStorePath } from "./workflow.ts";
 import { classify, observeToolPhase } from "./classifier.ts";
 import { recommend } from "./policy.ts";
 import { discoverModels, type DiscoveredModel, type DiscoveryResult } from "./router.ts";
@@ -222,6 +223,7 @@ function firstArg(args: string | string[] | undefined): string | undefined {
 export async function createFusionExtension(pi: ExtensionAPI, options: FusionExtensionOptions = {}): Promise<void> {
   const environment = options.env ?? process.env;
   const configPath = options.configPath ?? defaultConfigPath(environment);
+  const storePath = workflowStorePath(configPath);
   const configResult = await loadConfig(configPath);
   let discovery: DiscoveryResult | null = null;
   let telemetry: TelemetryStore | null = null;
@@ -514,9 +516,9 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     }
     if (workflow && (workflow.status === "running" || workflow.status === "awaiting-approval" || workflow.status === "paused")) return;
     const repo = ctx.cwd;
-    const foreign = await foreignOwnerForRepo(repo, getSessionId(ctx));
+    const foreign = await foreignOwnerForRepo(repo, getSessionId(ctx), storePath);
     state.foreignOwner = foreign !== null;
-    const existing = await activeWorkflowForRepo(repo, getSessionId(ctx));
+    const existing = await activeWorkflowForRepo(repo, getSessionId(ctx), storePath);
     if (existing) {
       workflow = existing;
       state.workflow = existing;
@@ -552,7 +554,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       ownerPid: process.pid,
     });
     state.workflow = workflow;
-    await upsertWorkflow(workflow);
+    await upsertWorkflow(workflow, storePath);
   };
 
   const getSessionId = (ctx: ExtensionContext): string => {
@@ -781,25 +783,29 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
+    // Capture the settled outcome BEFORE finishOneShot: persist() resets
+    // state.outcome to "unknown", so evaluating it afterwards would always
+    // report "passed" and never fail/block a node.
+    const settledOutcome = state.outcome;
     await finishOneShot(ctx);
     // Active workflow: a settled run completes the running node (or marks it
     // failed on error) and advances the graph to the next stage.
     if (state.config.status === "ready" && state.config.config.mode === "active" && workflow && workflow.status === "running") {
       const node = runningNode(workflow);
       if (node) {
-        workflow = advanceWorkflow(workflow, node.id, state.outcome === "error" ? "failed" : "passed", state.outcome === "error" ? "provider/tool error" : undefined);
+        workflow = advanceWorkflow(workflow, node.id, settledOutcome === "error" ? "failed" : "passed", settledOutcome === "error" ? "provider/tool error" : undefined);
         state.workflow = workflow;
         await persistWorkflowState();
       }
-      if (workflow.status === "complete" && workflow.adapter === "flicker" && workflow.flickerTicketId) {
+      if ((workflow.status === "complete" || workflow.status === "blocked") && workflow.adapter === "flicker" && workflow.flickerTicketId) {
         await syncFlickerStatus(workflow.flickerTicketId, workflow.status, { env: environment }).catch(() => undefined);
       }
-      await recordActiveOutcome(node);
+      await recordActiveOutcome(node, settledOutcome);
     }
     updateFooter(state, ctx);
   });
 
-  const recordActiveOutcome = async (node: WorkflowNode | null): Promise<void> => {
+  const recordActiveOutcome = async (node: WorkflowNode | null, outcome: "success" | "error" | "unknown"): Promise<void> => {
     if (state.config.status !== "ready" || !state.recommendation) return;
     const config = state.config.config;
     try {
@@ -813,11 +819,11 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         routeConfidence: state.recommendation.confidence,
         phase: state.classification?.phase ?? "unknown",
         risk: state.classification?.risk ?? "unknown",
-        accepted: state.outcome !== "error",
+        accepted: outcome !== "error",
         retries: 0,
         switches: 0,
         usage: state.usage,
-        failure: state.outcome === "error" ? "provider/tool error" : null,
+        failure: outcome === "error" ? "provider/tool error" : null,
         tuningVersion: 0,
       }, configPath);
     } catch {
@@ -827,7 +833,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
 
   const persistWorkflowState = async (): Promise<WorkflowState | null> => {
     if (!workflow) return null;
-    await upsertWorkflow(workflow);
+    await upsertWorkflow(workflow, storePath);
     return workflow;
   };
 
@@ -976,6 +982,9 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       workflow = cancelWorkflow(workflow);
       state.workflow = workflow;
       await persistWorkflowState();
+      if (workflow.adapter === "flicker" && workflow.flickerTicketId) {
+        await syncFlickerStatus(workflow.flickerTicketId, workflow.status, { env: environment }).catch(() => undefined);
+      }
       report(ctx, "fusion cancel: workflow cancelled");
     },
   });
@@ -1013,7 +1022,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       if (!proposal) { report(ctx, "fusion tune: no proposed proposal matches (pass an id)", "warning"); return; }
       const applied = await applyProposal(proposal, configPath);
       state.proposals = await loadProposals(configPath);
-      report(ctx, `fusion tune: approved · applied to future workflows · rollback /fusion-tune-rollback ${applied.id.slice(0, 8)}`);
+      report(ctx, `fusion tune: approved · proposal recorded with rollback snapshot (policy wiring lands in a later slice) · rollback /fusion-tune-rollback ${applied.id.slice(0, 8)}`);
     },
   });
   pi.registerCommand("fusion-tune-deny", {

@@ -810,3 +810,58 @@ describe("Pi Fusion one-shot active routing", () => {
     }
   });
 });
+
+describe("active workflow advancement on settlement", () => {
+  it("fails the running node when the settled outcome is error even with telemetry enabled", async () => {
+    const mock = await listen((request, response) => {
+      if (request.url === "/v1/models") {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ data: [
+          { id: "fusion-explore" }, { id: "fusion-sidekick" }, { id: "fusion-plan" },
+          { id: "fusion-reviewer" }, { id: "fusion-research" }, { id: "fusion-vision" }, { id: "fusion-design" },
+        ] }));
+        return;
+      }
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }));
+    });
+    const base = validConfig();
+    const config = validConfig({ provider: { ...base.provider, baseUrl: mock.baseUrl }, mode: "active" });
+    const { dir, path: configPath } = await writeConfig(config);
+    // Complete setup state so active mode is ready.
+    const setup = { version: 1 as const, complete: true as const, lastProbedAt: "x", probes: {
+      fast: { profile: "fast" as const, modelId: "fusion-explore", ok: true, keyless: false, probedAt: "x" },
+      code: { profile: "code" as const, modelId: "fusion-sidekick", ok: true, keyless: false, probedAt: "x" },
+      reason: { profile: "reason" as const, modelId: "fusion-plan", ok: true, keyless: false, probedAt: "x" },
+      review: { profile: "review" as const, modelId: "fusion-reviewer", ok: true, keyless: false, probedAt: "x" },
+      research: { profile: "research" as const, modelId: "fusion-research", ok: true, keyless: false, probedAt: "x" },
+      vision: { profile: "vision" as const, modelId: "fusion-vision", ok: true, keyless: false, probedAt: "x" },
+      design: { profile: "design" as const, modelId: "fusion-design", ok: true, keyless: false, probedAt: "x" },
+    } };
+    await writeFile(join(dir, "pi-fusion.setup.json"), JSON.stringify(setup), "utf8");
+    const runtime = fakeApi();
+    try {
+      await createFusionExtension(runtime.api, { configPath, env: { TEST_9ROUTER_KEY: "test" }, stderr: () => undefined });
+      const context = fakeContext(tmpdir(), [], "tui", { id: "existing", provider: "existing" }, []);
+      // Mutation prompt creates an awaiting-approval workflow; approve it.
+      await emit(runtime.handlers, context, "before_agent_start", { prompt: "Implement a TypeScript helper", images: [] });
+      await runtime.commands.get("fusion-plan")?.("", context);
+      await emit(runtime.handlers, context, "before_agent_start", { prompt: "Implement a TypeScript helper", images: [] });
+      // Simulate a provider error on the run, then settlement.
+      await emit(runtime.handlers, context, "tool_result", { toolName: "bash", toolCallId: "1", input: {}, content: [], details: {}, isError: true, usage: {} });
+      await emit(runtime.handlers, context, "after_provider_response", { status: 500, headers: {} });
+      await emit(runtime.handlers, context, "agent_settled", {});
+      const workflowOut = await runtime.commands.get("fusion-workflow")?.("", context);
+      const notifications: string[] = [];
+      const reportCtx = fakeContext(tmpdir(), notifications, "json");
+      await runtime.commands.get("fusion-status")?.("", reportCtx);
+      // The workflow should be blocked after the failing node, proving the
+      // settled outcome was captured before telemetry reset it.
+      const store = JSON.parse(await readFile(join(dir, "pi-fusion.workflows.json"), "utf8"));
+      assert.equal(store[0].status, "blocked", "error settlement must fail/block the node even with telemetry enabled");
+      assert.equal(store[0].nodes.some((node: any) => node.status === "failed"), true);
+    } finally {
+      await mock.close();
+    }
+  });
+});

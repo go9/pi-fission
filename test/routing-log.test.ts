@@ -3,7 +3,7 @@ import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
-import { appendRoutingEntry, describeRouting, formatRoutingLog, readRoutingEntries, routingLogPath, type RoutingLogEntry } from "../src/routing-log.ts";
+import { appendRoutingEntry, describeRouting, formatAgents, formatRoutingLog, readRoutingEntries, routingLogPath, sessionSummaries, widgetRows, type RoutingLogEntry } from "../src/routing-log.ts";
 
 const baseEntry = (overrides: Partial<RoutingLogEntry> = {}): RoutingLogEntry => ({
   version: 1,
@@ -55,6 +55,32 @@ describe("routing log", () => {
     await fs.appendFile(routingLogPath(configPath), "{broken\n", "utf8");
     const entries = await readRoutingEntries(configPath);
     assert.equal(entries.length, 1);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("summarizes sessions and renders widget rows without prompt content", async () => {
+    const dir = await import("node:fs/promises").then((fs) => fs.mkdtemp(join(tmpdir(), "fusion-summary-")));
+    const configPath = join(dir, "pi-fusion.json");
+    await appendRoutingEntry(configPath, baseEntry({ sessionId: "main", ts: "2026-08-07T10:00:00.000Z" }));
+    await appendRoutingEntry(configPath, baseEntry({
+      sessionId: "child",
+      sessionName: "reviewer",
+      ts: "2026-08-07T10:01:00.000Z",
+      phase: "review",
+      profile: "review",
+      toModel: "fusion-reviewer",
+      reason: "reviewing the work",
+    }));
+    await appendRoutingEntry(configPath, baseEntry({ sessionId: "stale", ts: "2026-08-01T00:00:00.000Z" }));
+    const summaries = sessionSummaries(await readRoutingEntries(configPath), Date.parse("2026-08-07T10:02:00.000Z"));
+    assert.equal(summaries.length, 2, "stale session is windowed out");
+    const collapsed = widgetRows(summaries, "main", false);
+    assert.equal(collapsed[0], "fusion: 2 agents routing · ctrl+alt+f for details");
+    const expanded = widgetRows(summaries, "main", true);
+    assert.ok(expanded.some((row) => /main\s+fusion-sidekick · writing code/.test(row)));
+    assert.ok(expanded.some((row) => /reviewer\s+fusion-reviewer · reviewing the work/.test(row)));
+    assert.doesNotMatch(expanded.join("\n"), /secret|prompt text/i);
+    assert.match(formatAgents(summaries, "main"), /reviewer — fusion-reviewer · reviewing the work/);
     await rm(dir, { recursive: true, force: true });
   });
 

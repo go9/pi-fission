@@ -1,5 +1,6 @@
 import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Key } from "@earendil-works/pi-tui";
 import {
   createDefaultConfig,
   defaultConfigPath,
@@ -20,7 +21,7 @@ import {
   type RoutingStatus,
 } from "./presentation.ts";
 import { diagnoseSetup, isActiveReady, loadSetupState, probeAll, saveSetupState } from "./setup.ts";
-import { appendRoutingEntry, describeRouting, readRoutingEntries, formatRoutingLog, type RoutingLogEntry } from "./routing-log.ts";
+import { appendRoutingEntry, describeRouting, formatAgents, formatRoutingLog, readRoutingEntries, sessionSummaries, widgetRows, type RoutingLogEntry } from "./routing-log.ts";
 import type {
   ActiveThinkingLevel,
   CanonicalProfile,
@@ -359,6 +360,14 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     return `pid:${process.pid}`;
   };
 
+  const getSessionName = (ctx: ExtensionContext): string | undefined => {
+    try {
+      return ctx.sessionManager?.getSessionName?.() ?? undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   const recordRouting = async (ctx: ExtensionContext, previousModel: ModelIdentity | null): Promise<void> => {
     if (state.config.status !== "ready" || state.config.config.mode !== "active") return;
     const kind: RoutingLogEntry["kind"] =
@@ -372,6 +381,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       version: 1,
       ts: new Date().toISOString(),
       sessionId: state.sessionId,
+      sessionName: getSessionName(ctx),
       cwd: ctx.cwd,
       kind,
       phase: state.classification?.phase ?? "unknown",
@@ -386,15 +396,46 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     await appendRoutingEntry(configPath, entry);
   };
 
+  let widgetExpanded = false;
+  let widgetTimer: NodeJS.Timeout | null = null;
+  let widgetCtx: ExtensionContext | null = null;
+
+  const refreshWidget = async (): Promise<void> => {
+    if (!widgetCtx || typeof widgetCtx.ui.setWidget !== "function") return;
+    const entries = await readRoutingEntries(configPath);
+    const summaries = sessionSummaries(entries, Date.now());
+    widgetCtx.ui.setWidget("pi-fusion-agents", widgetRows(summaries, state.sessionId, widgetExpanded));
+  };
+
+  const toggleWidget = (ctx: ExtensionContext): Promise<void> => {
+    widgetExpanded = !widgetExpanded;
+    const refreshed = refreshWidget();
+    report(ctx, widgetExpanded ? "fusion agents: expanded" : "fusion agents: collapsed", "info");
+    return refreshed;
+  };
+
   pi.on("session_start", async (_event, ctx) => {
     state.sessionId = getSessionId(ctx);
     setActiveModel(modelIdentity(ctx));
     updateFooter(state, ctx);
+    if (ctx.mode === "tui" && typeof ctx.ui.setWidget === "function") {
+      widgetCtx = ctx;
+      await refreshWidget();
+      if (!widgetTimer) {
+        widgetTimer = setInterval(() => { void refreshWidget(); }, 2000);
+        widgetTimer.unref();
+      }
+    }
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
     await restoreRoute(ctx);
-    if (ctx.mode === "tui") ctx.ui.setStatus("pi-fusion", undefined);
+    if (widgetTimer) { clearInterval(widgetTimer); widgetTimer = null; }
+    widgetCtx = null;
+    if (ctx.mode === "tui") {
+      if (typeof ctx.ui.setWidget === "function") ctx.ui.setWidget("pi-fusion-agents", undefined);
+      ctx.ui.setStatus("pi-fusion", undefined);
+    }
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
@@ -559,6 +600,10 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     description: "Show current models and why each session switched (main agent and subagents)",
     handler: async (_args, ctx) => report(ctx, formatRoutingLog(await readRoutingEntries(configPath))),
   });
+  pi.registerCommand("fusion-agents", {
+    description: "Show a summary of every active Fusion agent and the model it is using",
+    handler: async (_args, ctx) => report(ctx, formatAgents(sessionSummaries(await readRoutingEntries(configPath), Date.now()), state.sessionId)),
+  });
   pi.registerCommand("fusion-setup-status", {
     description: "Show seven-profile setup and probe status",
     handler: async (_args, ctx) => report(ctx, formatSetup(asView(state))),
@@ -657,6 +702,12 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       report(ctx, "fusion setup: complete · 7/7 profiles passed · automatic routing active");
     },
   });
+  if (typeof pi.registerShortcut === "function") {
+    pi.registerShortcut(Key.ctrlAlt("f"), {
+      description: "Toggle the live Pi Fusion agents widget",
+      handler: (ctx) => toggleWidget(ctx),
+    });
+  }
 }
 
 export default function piFusion(pi: ExtensionAPI): void {

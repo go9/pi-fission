@@ -7,6 +7,7 @@ export interface RoutingLogEntry {
   version: 1;
   ts: string;
   sessionId: string;
+  sessionName?: string;
   cwd?: string;
   kind: "route" | "retained" | "manual" | "restore-failed";
   phase: Phase | "unknown";
@@ -90,6 +91,76 @@ export async function readRoutingEntries(configPath: string): Promise<RoutingLog
 
 function formatModel(model: string | null): string {
   return model ?? "unknown";
+}
+
+/** Per-session live summary derived from the latest routing entry in an active window. */
+export interface SessionSummary {
+  sessionId: string;
+  sessionName: string | null;
+  currentModel: string | null;
+  profile: CanonicalProfile | null;
+  phase: Phase | "unknown";
+  reason: string;
+  lastTs: string;
+}
+
+const ACTIVE_WINDOW_MS = 15 * 60_000;
+
+/** Latest entry per session, filtered to a recent window so finished workers drop out. */
+export function sessionSummaries(entries: RoutingLogEntry[], now: number = Date.now()): SessionSummary[] {
+  const bySession = new Map<string, RoutingLogEntry[]>();
+  for (const entry of entries) {
+    const list = bySession.get(entry.sessionId) ?? [];
+    list.push(entry);
+    bySession.set(entry.sessionId, list);
+  }
+  const summaries: SessionSummary[] = [];
+  for (const [sessionId, list] of bySession) {
+    const latest = list[list.length - 1]!;
+    const ts = Date.parse(latest.ts);
+    if (!Number.isFinite(ts) || now - ts > ACTIVE_WINDOW_MS) continue;
+    summaries.push({
+      sessionId,
+      sessionName: latest.sessionName ?? null,
+      currentModel: latest.kind === "manual" ? latest.fromModel : (latest.toModel ?? latest.fromModel),
+      profile: latest.profile,
+      phase: latest.phase,
+      reason: latest.reason,
+      lastTs: latest.ts,
+    });
+  }
+  summaries.sort((a, b) => b.lastTs.localeCompare(a.lastTs));
+  return summaries;
+}
+
+function sessionLabel(summary: SessionSummary, mainSessionId: string): string {
+  if (summary.sessionId === mainSessionId) return "main";
+  return summary.sessionName ?? `sub ${summary.sessionId.slice(0, 8)}`;
+}
+
+/** Widget rows: one compact line collapsed, per-agent rows expanded. */
+export function widgetRows(summaries: SessionSummary[], mainSessionId: string, expanded: boolean): string[] {
+  const count = summaries.length;
+  if (!expanded) {
+    return [`fusion: ${count} agent${count === 1 ? "" : "s"} routing · ctrl+alt+f for details`];
+  }
+  const rows: string[] = [`fusion workers (${count}) · ctrl+alt+f to collapse`];
+  if (count === 0) rows.push("  (no active sessions in the last 15 minutes)");
+  for (const summary of summaries) {
+    const model = summary.currentModel ?? "unknown";
+    rows.push(`  ${sessionLabel(summary, mainSessionId).padEnd(18)} ${model} · ${summary.reason}${summary.profile ? ` (${summary.profile})` : ""}`);
+  }
+  return rows;
+}
+
+/** Text version for /fusion-agents (works in every Pi mode). */
+export function formatAgents(summaries: SessionSummary[], mainSessionId: string): string {
+  if (summaries.length === 0) return "fusion agents: no active sessions in the last 15 minutes";
+  const lines = [`fusion agents: ${summaries.length} active`];
+  for (const summary of summaries) {
+    lines.push(`  ${sessionLabel(summary, mainSessionId)} — ${summary.currentModel ?? "unknown"} · ${summary.reason}`);
+  }
+  return lines.join("\n");
 }
 
 /** Render the routing history grouped by session. */

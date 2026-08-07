@@ -54,24 +54,28 @@ Low-confidence, unavailable, manually overridden, setup-blocked, and restoration
 
 ## See what models are in use (main agent and subagents)
 
-```text
-/fusion-routing
-```
-
-Every session (the main agent and each subagent, which is its own Pi session) appends a content-free entry for each routing decision. The command groups them by session and shows, for each agent/subagent, the current model and why it switched:
+The Pi TUI shows a live **fusion agents widget** above the editor:
 
 ```text
-fusion routing:
-  session 3f1a…
-    now: fusion-sidekick (code)
-    switched to fusion-sidekick because writing code · 92%
-    switched to fusion-explore because exploring the codebase · 87%
-  session 8b2c…
-    now: fusion-reviewer (review)
-    switched to fusion-reviewer because reviewing the work · 90%
+fusion: 3 agents routing · ctrl+alt+f for details
 ```
 
-The raw log lives at `~/.pi/agent/extensions/pi-fusion.routing.jsonl`. Entries contain only session id, working directory, phase, profile, model transitions, and reason codes — never prompts, code, or tool output.
+Press **ctrl+alt+f** to expand it into per-agent rows, updating live every ~2 seconds:
+
+```text
+fusion workers (3) · ctrl+alt+f to collapse
+  main              fusion-sidekick · writing code (code)
+  reviewer          fusion-reviewer · reviewing the work (review)
+  sub 3f1a9c2b      fusion-explore · exploring the codebase (fast)
+```
+
+Each row shows the agent (main, named subagent session, or a short id), the model it is currently using, and why it switched. The same view is available in any Pi mode as a command:
+
+```text
+/fusion-agents
+```
+
+The raw log lives at `~/.pi/agent/extensions/pi-fusion.routing.jsonl`; `/fusion-routing` shows the full grouped history. Entries contain only session id/name, working directory, phase, profile, model transitions, and reason codes — never prompts, code, or tool output.
 
 ## Diagnostics
 
@@ -82,6 +86,7 @@ The raw log lives at `~/.pi/agent/extensions/pi-fusion.routing.jsonl`. Entries c
 /fusion-config
 /fusion-setup-status
 /fusion-routing
+/fusion-agents
 /fusion-mode active|shadow|off
 ```
 

@@ -33,6 +33,7 @@ function fakeContext(
   models: any[] = [],
   thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" = "high",
 ): ExtensionContext {
+  const widgets = new Map<string, string[]>();
   return {
     mode: "tui",
     hasUI: true,
@@ -43,14 +44,21 @@ function fakeContext(
     ui: {
       notify: (message: string) => notifications.push(message),
       setStatus: (key: string, value: string | undefined) => notifications.push(`status:${key}:${value ?? "cleared"}`),
+      setWidget: (key: string, content: string[] | undefined) => {
+        if (content === undefined) widgets.delete(key);
+        else widgets.set(key, content);
+        notifications.push(`widget:${key}:${(content ?? []).join(" | ")}`);
+      },
     },
-  } as unknown as ExtensionContext;
+    sessionManager: {},
+  } as unknown as ExtensionContext & { ui: { setWidget: (key: string, content?: string[]) => void } };
 }
 
 function fakeApi(options: { setModel?: (model: any, index: number) => boolean | Promise<boolean> } = {}) {
   const handlers = new Map<string, Handler[]>();
   const commands = new Map<string, CommandHandler>();
   const providers: Array<{ name: string; provider: any }> = [];
+  const shortcuts = new Map<string, { description: string; handler: (ctx: any) => void | Promise<void> }>();
   const selectionCalls: any[] = [];
   const thinkingCalls: string[] = [];
   let thinkingLevel = "high";
@@ -60,6 +68,7 @@ function fakeApi(options: { setModel?: (model: any, index: number) => boolean | 
     },
     registerCommand(name: string, command: { handler: CommandHandler }) { commands.set(name, command.handler); },
     registerProvider(name: string, provider: any) { providers.push({ name, provider }); },
+    registerShortcut(key: string, options: { description: string; handler: (ctx: any) => void | Promise<void> }) { shortcuts.set(key, options); },
     async setModel(model: any) {
       selectionCalls.push(model);
       return options.setModel?.(model, selectionCalls.length - 1) ?? true;
@@ -67,7 +76,7 @@ function fakeApi(options: { setModel?: (model: any, index: number) => boolean | 
     getThinkingLevel() { return thinkingLevel; },
     setThinkingLevel(level: string) { thinkingLevel = level; thinkingCalls.push(level); },
   } as unknown as ExtensionAPI;
-  return { api, handlers, commands, providers, selectionCalls, thinkingCalls, setThinking(level: string) { thinkingLevel = level; } };
+  return { api, handlers, commands, providers, shortcuts, selectionCalls, thinkingCalls, setThinking(level: string) { thinkingLevel = level; } };
 }
 
 async function emit(runtime: ReturnType<typeof fakeApi>, context: ExtensionContext, name: string, event: any): Promise<unknown[]> {
@@ -99,7 +108,7 @@ describe("router-only Pi Fusion extension", () => {
     try {
       await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       assert.deepEqual([...runtime.commands.keys()].sort(), [
-        "fusion", "fusion-config", "fusion-explain", "fusion-mode", "fusion-routing", "fusion-setup", "fusion-setup-status", "fusion-status",
+        "fusion", "fusion-agents", "fusion-config", "fusion-explain", "fusion-mode", "fusion-routing", "fusion-setup", "fusion-setup-status", "fusion-status",
       ]);
       assert.equal(runtime.handlers.has("tool_call"), false, "Fusion never intercepts tools");
       assert.equal(runtime.handlers.has("tool_result"), false);
@@ -306,6 +315,41 @@ describe("router-only Pi Fusion extension", () => {
       await emit(runtime, context, "model_select", { model: { provider: "existing", id: "original" }, previousModel: target, source: "set" });
       await emit(runtime, context, "before_agent_start", { prompt: "Implement another helper", images: [] });
       assert.equal(runtime.selectionCalls.length, 3, "late restore set event must not be treated as a manual override");
+    } finally {
+      await saved.mock.close();
+    }
+  });
+
+  it("registers a live agents widget and a toggle shortcut", async () => {
+    const saved = await fixture();
+    const runtime = fakeApi();
+    const notifications: string[] = [];
+    const context = fakeContext(tmpdir(), notifications);
+    try {
+      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await emit(runtime, context, "session_start", {});
+      assert.ok(runtime.shortcuts.has("ctrl+alt+f"), "toggle shortcut registered");
+      assert.ok(notifications.some((line) => line.startsWith("widget:pi-fusion-agents:")), JSON.stringify(notifications));
+      assert.ok(notifications.some((line) => /0 agents routing/.test(line)));
+    } finally {
+      await saved.mock.close();
+    }
+  });
+
+  it("expands the widget to per-agent rows after a routed prompt", async () => {
+    const saved = await fixture();
+    const runtime = fakeApi();
+    const target = { provider: "9router", id: saved.config.profiles.code.modelId };
+    const notifications: string[] = [];
+    const context = fakeContext(tmpdir(), notifications, { provider: "existing", id: "original" }, [target]);
+    try {
+      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await emit(runtime, context, "session_start", {});
+      await emit(runtime, context, "before_agent_start", { prompt: "Implement a TypeScript helper", images: [] });
+      await runtime.shortcuts.get("ctrl+alt+f")!.handler(context);
+      const expanded = notifications.filter((line) => line.startsWith("widget:pi-fusion-agents:")).at(-1);
+      assert.ok(expanded && /fusion workers \(1\)/.test(expanded), JSON.stringify(expanded));
+      assert.ok(expanded && /main\s+fusion-sidekick · writing code/.test(expanded), JSON.stringify(expanded));
     } finally {
       await saved.mock.close();
     }

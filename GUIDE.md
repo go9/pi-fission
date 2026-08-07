@@ -42,6 +42,20 @@ Pass only the mappings that differ:
 
 Setup re-runs all seven probes and returns to active mode only if every profile passes.
 
+## Live agents widget
+
+In the TUI, a widget above the editor shows how many Fusion agents are active. Press **ctrl+alt+f** to expand it; rows update every ~2 seconds with each agent's current model and why it switched:
+
+```text
+fusion: 2 agents routing · ctrl+alt+f for details   (collapsed)
+
+fusion workers (2) · ctrl+alt+f to collapse
+  main        fusion-sidekick · writing code
+  reviewer    fusion-reviewer · reviewing the work
+```
+
+`/fusion-agents` prints the same summary in any mode.
+
 ## Status and troubleshooting
 
 ```text
@@ -50,6 +64,7 @@ Setup re-runs all seven probes and returns to active mode only if every profile 
 /fusion-config
 /fusion-setup-status
 /fusion-routing
+/fusion-agents
 ```
 
 `/fusion-routing` shows, per session (main agent and each subagent), the current model and why it was selected:

@@ -15,6 +15,8 @@ import {
   pauseWorkflow,
   planWorkflow,
   resumeWorkflow,
+  retryBlockedWorkflow,
+  reopenWorkflowAt,
   saveWorkflows,
   upsertWorkflow,
 } from "../src/workflow.ts";
@@ -77,6 +79,83 @@ describe("workflow planning and runtime", () => {
     assert.equal(workflow.status, "blocked");
   });
 
+  it("refuses to pass implement and regression nodes without tool evidence", () => {
+    const classification = classify({ text: "Implement a TypeScript helper and tests" });
+    let workflow = createWorkflowState({
+      repo: "/repo", adapter: "session", flickerTicketId: null, classification,
+      mode: "active", ownerSession: "s1", ownerPid: 1,
+    });
+    workflow = approveWorkflow(workflow, {
+      scope: "x", acceptance: [], worktree: "/repo", writer: "w1", authority: ["local-commit"],
+      profile: "code", maxFanout: 4, maxDepth: 2, maxRetries: 3, maxSwitches: 4, budgetTokens: null,
+    });
+    workflow = advanceWorkflow(workflow, workflow.nodes.find((node) => node.status === "running")!.id, "passed");
+    workflow = advanceWorkflow(workflow, workflow.nodes.find((node) => node.status === "running")!.id, "passed");
+    const implement = workflow.nodes.find((node) => node.status === "running")!;
+    assert.equal(implement.kind, "implement");
+    workflow = advanceWorkflow(workflow, implement.id, "passed");
+    assert.equal(workflow.status, "blocked");
+    assert.equal(workflow.nodes.find((node) => node.id === implement.id)?.error, "missing implementation evidence");
+
+    workflow = retryBlockedWorkflow(workflow, 3);
+    workflow = {
+      ...workflow,
+      nodes: workflow.nodes.map((node) => node.id === implement.id ? { ...node, evidence: [...node.evidence, "tool:write:ok"] } : node),
+    };
+    workflow = advanceWorkflow(workflow, implement.id, "passed");
+    assert.equal(workflow.nodes.find((node) => node.id === implement.id)?.status, "passed");
+    workflow = advanceWorkflow(workflow, workflow.nodes.find((node) => node.status === "running")!.id, "passed");
+    const regression = workflow.nodes.find((node) => node.status === "running")!;
+    assert.equal(regression.kind, "regression");
+    workflow = advanceWorkflow(workflow, regression.id, "passed");
+    assert.equal(workflow.status, "blocked");
+    assert.equal(workflow.nodes.find((node) => node.id === regression.id)?.error, "missing regression evidence");
+  });
+
+  it("reopens an upstream node and invalidates downstream evidence", () => {
+    const classification = classify({ text: "Implement a TypeScript helper and tests" });
+    let workflow = createWorkflowState({
+      repo: "/repo", adapter: "session", flickerTicketId: null, classification,
+      mode: "active", ownerSession: "s1", ownerPid: 1,
+    });
+    workflow = approveWorkflow(workflow, {
+      scope: "x", acceptance: [], worktree: "/repo", writer: "w1", authority: ["local-commit"],
+      profile: "code", maxFanout: 4, maxDepth: 2, maxRetries: 2, maxSwitches: 4, budgetTokens: null,
+    });
+    workflow = advanceWorkflow(workflow, workflow.nodes.find((node) => node.status === "running")!.id, "passed");
+    workflow = advanceWorkflow(workflow, workflow.nodes.find((node) => node.status === "running")!.id, "passed");
+    const implement = workflow.nodes.find((node) => node.status === "running")!;
+    workflow = { ...workflow, nodes: workflow.nodes.map((node) => node.id === implement.id ? { ...node, evidence: ["tool:write:ok"] } : node) };
+    workflow = advanceWorkflow(workflow, implement.id, "passed");
+    const review = workflow.nodes.find((node) => node.status === "running")!;
+    workflow = advanceWorkflow(workflow, review.id, "failed", "missing file");
+    workflow = reopenWorkflowAt(workflow, "implement", 2);
+    assert.equal(workflow.status, "running");
+    assert.equal(workflow.nodes.find((node) => node.kind === "implement")?.status, "running");
+    assert.match(workflow.nodes.find((node) => node.kind === "implement")?.evidence.at(-1) ?? "", /^reopen:1$/);
+    assert.ok(workflow.nodes.filter((node) => ["review", "regression"].includes(node.kind)).every((node) => node.status === "pending" && node.evidence.length === 0));
+  });
+
+  it("retries a blocked node only within the approved retry cap", () => {
+    const classification = classify({ text: "Implement a TypeScript helper and tests" });
+    let workflow = createWorkflowState({
+      repo: "/repo", adapter: "session", flickerTicketId: null, classification,
+      mode: "active", ownerSession: "s1", ownerPid: 1,
+    });
+    workflow = approveWorkflow(workflow, {
+      scope: "x", acceptance: [], worktree: "/repo", writer: "w1", authority: ["local-commit"],
+      profile: "code", maxFanout: 4, maxDepth: 2, maxRetries: 1, maxSwitches: 4, budgetTokens: null,
+    });
+    const first = workflow.nodes.find((node) => node.status === "running")!;
+    workflow = advanceWorkflow(workflow, first.id, "failed", "transient provider error");
+    workflow = retryBlockedWorkflow(workflow, 1, () => new Date("2026-01-01T00:00:00Z"));
+    assert.equal(workflow.status, "running");
+    assert.equal(workflow.nodes.find((node) => node.id === first.id)?.status, "running");
+    assert.deepEqual(workflow.nodes.find((node) => node.id === first.id)?.evidence, ["retry:1"]);
+    workflow = advanceWorkflow(workflow, first.id, "failed", "still failing");
+    assert.equal(retryBlockedWorkflow(workflow, 1), workflow, "exhausted retry returns the unchanged blocked workflow");
+  });
+
   it("pause, resume, and cancel transitions are idempotent and reversible", () => {
     const classification = classify({ text: "Implement a TypeScript helper and tests" });
     let workflow = createWorkflowState({
@@ -112,6 +191,15 @@ describe("workflow planning and runtime", () => {
     assert.equal(mine?.id, workflow.id);
     const foreign = await foreignOwnerForRepo("/repo", "s2", storePath);
     assert.ok(foreign, "a second session sees the first session's active workflow as foreign ownership");
+
+    let blocked = approveWorkflow(workflow, {
+      scope: "x", acceptance: [], worktree: "/repo", writer: "w1", authority: ["local-commit"],
+      profile: "code", maxFanout: 4, maxDepth: 2, maxRetries: 1, maxSwitches: 4, budgetTokens: null,
+    });
+    blocked = advanceWorkflow(blocked, blocked.nodes.find((node) => node.status === "running")!.id, "failed", "provider error");
+    await upsertWorkflow(blocked, storePath);
+    assert.equal((await activeWorkflowForRepo("/repo", "s1", storePath))?.status, "blocked", "blocked workflow remains recoverable after restart");
+    assert.equal((await foreignOwnerForRepo("/repo", "s2", storePath))?.status, "blocked", "blocked workflow still owns the repository");
     await saveWorkflows([], storePath);
     assert.equal((await loadWorkflows(storePath)).length, 0);
   });

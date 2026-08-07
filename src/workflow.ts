@@ -130,11 +130,21 @@ export function advanceWorkflow(workflow: WorkflowState, nodeId: string, status:
   const timestamp = (now ?? (() => new Date()))().toISOString();
   const node = workflow.nodes.find((item) => item.id === nodeId);
   if (!node) return workflow;
+  let resolvedStatus = status;
+  let resolvedError = error;
+  if (status === "passed" && node.kind === "implement" && !node.evidence.some((item) => /^tool:(?:write|edit|bash):ok$/.test(item))) {
+    resolvedStatus = "failed";
+    resolvedError = "missing implementation evidence";
+  }
+  if (status === "passed" && node.kind === "regression" && !node.evidence.some((item) => /^tool:(?:read|bash):ok$/.test(item))) {
+    resolvedStatus = "failed";
+    resolvedError = "missing regression evidence";
+  }
   const updatedNodes = workflow.nodes.map((item) => {
     if (item.id !== nodeId) return item;
-    return { ...item, status, finishedAt: timestamp, error };
+    return { ...item, status: resolvedStatus, finishedAt: timestamp, error: resolvedError };
   });
-  if (status === "failed" || status === "blocked") {
+  if (resolvedStatus === "failed" || resolvedStatus === "blocked") {
     return { ...workflow, nodes: updatedNodes, status: "blocked", updatedAt: timestamp };
   }
   // Advance to the next pending node whose dependencies are satisfied.
@@ -174,6 +184,68 @@ export function resumeWorkflow(workflow: WorkflowState): WorkflowState {
   return { ...workflow, status: "running", updatedAt: new Date().toISOString() };
 }
 
+/** Retry the failed node of a blocked workflow within its approved retry cap. */
+export function retryBlockedWorkflow(workflow: WorkflowState, maxRetries: number, now?: () => Date): WorkflowState {
+  if (workflow.status !== "blocked") return workflow;
+  const failed = workflow.nodes.find((node) => node.status === "failed" || node.status === "blocked");
+  if (!failed) return workflow;
+  const attempts = failed.evidence.filter((item) => item.startsWith("retry:")).length;
+  if (attempts >= Math.max(0, maxRetries)) return workflow;
+  const timestamp = (now ?? (() => new Date()))().toISOString();
+  return {
+    ...workflow,
+    status: "running",
+    updatedAt: timestamp,
+    nodes: workflow.nodes.map((node) => node.id === failed.id
+      ? {
+          ...node,
+          status: "running" as const,
+          startedAt: timestamp,
+          finishedAt: null,
+          error: undefined,
+          evidence: [...node.evidence, `retry:${attempts + 1}`],
+        }
+      : node),
+  };
+}
+
+/** Reopen an upstream node after review/regression invalidates downstream evidence. */
+export function reopenWorkflowAt(workflow: WorkflowState, kind: WorkflowNodeKind, maxRetries: number, now?: () => Date): WorkflowState {
+  if (workflow.status !== "blocked") return workflow;
+  const index = workflow.nodes.findIndex((node) => node.kind === kind);
+  if (index < 0) return workflow;
+  const target = workflow.nodes[index]!;
+  const attempts = target.evidence.filter((item) => item.startsWith("reopen:")).length;
+  if (attempts >= Math.max(0, maxRetries)) return workflow;
+  const timestamp = (now ?? (() => new Date()))().toISOString();
+  return {
+    ...workflow,
+    status: "running",
+    updatedAt: timestamp,
+    nodes: workflow.nodes.map((node, nodeIndex) => {
+      if (nodeIndex < index) return node;
+      if (nodeIndex === index) {
+        return {
+          ...node,
+          status: "running" as const,
+          startedAt: timestamp,
+          finishedAt: null,
+          error: undefined,
+          evidence: [...node.evidence, `reopen:${attempts + 1}`],
+        };
+      }
+      return {
+        ...node,
+        status: "pending" as const,
+        startedAt: null,
+        finishedAt: null,
+        error: undefined,
+        evidence: [],
+      };
+    }),
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -207,14 +279,16 @@ export async function upsertWorkflow(workflow: WorkflowState, path = workflowSto
   await saveWorkflows(workflows, path);
 }
 
-/** Active workflows for a repository in the current session. */
+const RESUMABLE_WORKFLOW_STATUSES: WorkflowStatus[] = ["running", "paused", "awaiting-approval", "blocked", "recovered"];
+
+/** Active or recoverable workflows for a repository in the current session. */
 export async function activeWorkflowForRepo(repo: string, ownerSession: string, path = workflowStorePath()): Promise<WorkflowState | null> {
   const workflows = await loadWorkflows(path);
-  return workflows.find((item) => item.repo === repo && item.ownerSession === ownerSession && (item.status === "running" || item.status === "paused" || item.status === "awaiting-approval")) ?? null;
+  return workflows.find((item) => item.repo === repo && item.ownerSession === ownerSession && RESUMABLE_WORKFLOW_STATUSES.includes(item.status)) ?? null;
 }
 
-/** Concurrent-session ownership warning: another session owns a live workflow on this repo. */
+/** Concurrent-session ownership warning: another session owns a live or recoverable workflow on this repo. */
 export async function foreignOwnerForRepo(repo: string, ownerSession: string, path = workflowStorePath()): Promise<WorkflowState | null> {
   const workflows = await loadWorkflows(path);
-  return workflows.find((item) => item.repo === repo && item.ownerSession !== ownerSession && (item.status === "running" || item.status === "paused" || item.status === "awaiting-approval")) ?? null;
+  return workflows.find((item) => item.repo === repo && item.ownerSession !== ownerSession && RESUMABLE_WORKFLOW_STATUSES.includes(item.status)) ?? null;
 }

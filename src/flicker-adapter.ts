@@ -15,8 +15,16 @@ export async function resolveFlickerProject(repo: string, options: { env?: NodeJ
   try {
     const { stdout } = await execFileAsync("flicker", ["project", "show", "--json"], { cwd: repo, env: options.env ?? process.env });
     const parsed = JSON.parse(stdout);
-    const slug = typeof parsed?.slug === "string" ? parsed.slug : typeof parsed?.project_slug === "string" ? parsed.project_slug : null;
-    return { ok: true, projectSlug: slug };
+    const slug = typeof parsed?.slug === "string"
+      ? parsed.slug
+      : typeof parsed?.project_slug === "string"
+        ? parsed.project_slug
+        : typeof parsed?.project?.slug === "string"
+          ? parsed.project.slug
+          : null;
+    return slug
+      ? { ok: true, projectSlug: slug }
+      : { ok: false, projectSlug: null, error: "Flicker project response did not contain a slug" };
   } catch (error) {
     return { ok: false, projectSlug: null, error: (error as Error).message.slice(0, 200) };
   }
@@ -50,21 +58,32 @@ export async function writeFlickerDocument(ticketId: string, kind: string, title
   }
 }
 
-/** Advance the Flicker ticket status to match workflow state. */
+/**
+ * Reconcile a workflow with Flicker's real lifecycle. Local workflow completion
+ * means tested release readiness, not merge completion, so it deliberately
+ * leaves the ticket in_progress. Only the release stage may call ticket complete.
+ */
 export async function syncFlickerStatus(ticketId: string, status: WorkflowState["status"], options: { env?: NodeJS.ProcessEnv } = {}): Promise<{ ok: boolean; error?: string }> {
-  const transition: Record<WorkflowState["status"], string> = {
-    planning: "start",
-    "awaiting-approval": "start",
-    running: "start",
-    paused: "start",
-    blocked: "start",
-    recovered: "start",
-    complete: "complete",
-    cancelled: "defer",
-  };
-  const command = transition[status] ?? "start";
+  const env = options.env ?? process.env;
+  const run = (command: string) => execFileAsync("flicker", ["ticket", command, ticketId, "--json"], { cwd: process.cwd(), env });
   try {
-    await execFileAsync("flicker", ["ticket", command, ticketId, "--json"], { cwd: process.cwd(), env: options.env ?? process.env });
+    const { stdout } = await execFileAsync("flicker", ["ticket", "show", ticketId, "--json"], { cwd: process.cwd(), env });
+    const current = JSON.parse(stdout)?.status;
+    if (typeof current !== "string") return { ok: false, error: "Flicker ticket response did not contain a status" };
+
+    if (status === "cancelled") {
+      if (current === "selected_for_dev" || current === "in_progress") await run("defer");
+      return { ok: true };
+    }
+    if (current === "done") return { ok: false, error: "Flicker ticket is already done; refusing automatic reopen" };
+    if (current === "backlog") {
+      await run("select-for-dev");
+      await run("start");
+    } else if (current === "selected_for_dev") {
+      await run("start");
+    }
+    // in_progress is already correct for running, paused, blocked, recovered,
+    // and locally complete/release-ready workflows.
     return { ok: true };
   } catch (error) {
     return { ok: false, error: (error as Error).message.slice(0, 200) };

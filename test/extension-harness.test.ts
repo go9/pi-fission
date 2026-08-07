@@ -104,6 +104,12 @@ async function emit(handlers: Map<string, Handler[]>, context: ExtensionContext,
   }
 }
 
+async function emitResults(handlers: Map<string, Handler[]>, context: ExtensionContext, name: string, event: any): Promise<unknown[]> {
+  const results: unknown[] = [];
+  for (const handler of handlers.get(name) ?? []) results.push(await handler(event, context));
+  return results;
+}
+
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((complete) => { resolve = complete; });
@@ -156,7 +162,7 @@ describe("Pi observer extension shadow mode", () => {
       ].sort((a, b) => a.localeCompare(b));
 
       assert.deepEqual([...runtime.commands.keys()].sort(), expectedCommands);
-      for (const event of ["agent_settled", "before_agent_start", "tool_result", "turn_end", "model_select", "thinking_level_select", "after_provider_response", "session_start", "session_shutdown"]) {
+      for (const event of ["agent_settled", "before_agent_start", "tool_call", "tool_result", "turn_end", "model_select", "thinking_level_select", "after_provider_response", "session_start", "session_shutdown"]) {
         assert.ok(runtime.handlers.has(event), `registered ${event}`);
       }
 
@@ -812,6 +818,67 @@ describe("Pi Fusion one-shot active routing", () => {
 });
 
 describe("active workflow advancement on settlement", () => {
+  it("enforces approval, read-only node, writer tool, and remote authority boundaries", async () => {
+    const mock = await listen((request, response) => {
+      if (request.url === "/v1/models") {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ data: [
+          { id: "fusion-explore" }, { id: "fusion-sidekick" }, { id: "fusion-plan" },
+          { id: "fusion-reviewer" }, { id: "fusion-research" }, { id: "fusion-vision" }, { id: "fusion-design" },
+        ] }));
+        return;
+      }
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }));
+    });
+    const base = validConfig();
+    const config = validConfig({ provider: { ...base.provider, baseUrl: mock.baseUrl }, mode: "active" });
+    const { dir, path: configPath } = await writeConfig(config);
+    const setup = { version: 1 as const, complete: true as const, lastProbedAt: "x", probes: {
+      fast: { profile: "fast" as const, modelId: "fusion-explore", ok: true, keyless: false, probedAt: "x" },
+      code: { profile: "code" as const, modelId: "fusion-sidekick", ok: true, keyless: false, probedAt: "x" },
+      reason: { profile: "reason" as const, modelId: "fusion-plan", ok: true, keyless: false, probedAt: "x" },
+      review: { profile: "review" as const, modelId: "fusion-reviewer", ok: true, keyless: false, probedAt: "x" },
+      research: { profile: "research" as const, modelId: "fusion-research", ok: true, keyless: false, probedAt: "x" },
+      vision: { profile: "vision" as const, modelId: "fusion-vision", ok: true, keyless: false, probedAt: "x" },
+      design: { profile: "design" as const, modelId: "fusion-design", ok: true, keyless: false, probedAt: "x" },
+    } };
+    await writeFile(join(dir, "pi-fusion.setup.json"), JSON.stringify(setup), "utf8");
+    const runtime = fakeApi();
+    const projectDir = await mkdtemp(join(tmpdir(), "pi-fusion-gate-"));
+    const context = fakeContext(projectDir, [], "tui", { id: "existing", provider: "existing" }, []);
+    try {
+      await createFusionExtension(runtime.api, { configPath, env: { TEST_9ROUTER_KEY: "test" }, stderr: () => undefined });
+      await emit(runtime.handlers, context, "before_agent_start", { prompt: "Implement a TypeScript helper", images: [] });
+
+      assert.deepEqual(await emitResults(runtime.handlers, context, "tool_call", { toolName: "read", toolCallId: "r", input: { path: "README.md" } }), [undefined]);
+      assert.deepEqual(await emitResults(runtime.handlers, context, "tool_call", { toolName: "write", toolCallId: "w", input: { path: "x", content: "x" } }), [
+        { block: true, reason: "Approve the Pi Fusion plan before repository mutation", terminate: true },
+      ]);
+
+      await runtime.commands.get("fusion-plan")?.("", context);
+      await emit(runtime.handlers, context, "before_agent_start", { prompt: "Continue the approved workflow", images: [] });
+      const planWrite = await emitResults(runtime.handlers, context, "tool_call", { toolName: "edit", toolCallId: "e", input: {} });
+      assert.match(String((planWrite[0] as any).reason), /plan node is read-only/);
+      await emit(runtime.handlers, context, "agent_settled", {});
+
+      // A read-only continuation preserves the approved workflow and advances
+      // plan-review instead of clearing the workflow.
+      await emit(runtime.handlers, context, "before_agent_start", { prompt: "Review the approved plan", images: [] });
+      await emit(runtime.handlers, context, "agent_settled", {});
+      await emit(runtime.handlers, context, "before_agent_start", { prompt: "Implement the approved helper", images: [] });
+
+      assert.deepEqual(await emitResults(runtime.handlers, context, "tool_call", { toolName: "write", toolCallId: "w2", input: { path: "x", content: "x" } }), [undefined]);
+      assert.deepEqual(await emitResults(runtime.handlers, context, "tool_call", { toolName: "bash", toolCallId: "b1", input: { command: "npm test" } }), [undefined]);
+      const remote = await emitResults(runtime.handlers, context, "tool_call", { toolName: "bash", toolCallId: "b2", input: { command: "git push origin HEAD" } });
+      assert.match(String((remote[0] as any).reason), /require separate explicit authority/);
+      const child = await emitResults(runtime.handlers, context, "tool_call", { toolName: "subagent", toolCallId: "s", input: {} });
+      assert.match(String((child[0] as any).reason), /outside the approved writer tool set/);
+    } finally {
+      await mock.close();
+    }
+  });
+
   it("fails the running node when the settled outcome is error even with telemetry enabled", async () => {
     const mock = await listen((request, response) => {
       if (request.url === "/v1/models") {

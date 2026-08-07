@@ -2,7 +2,7 @@
 
 `pi-fusion` is a standalone Pi package implementing the **full-product control plane**: it classifies coding work, routes each request and workflow phase to a semantic 9Router profile, orchestrates the software-delivery lifecycle, delegates only when fresh context or independent/parallel work is valuable, and learns from outcomes through permission-gated tuning proposals.
 
-**Status: in development.** This checkout is a vertical slice of Flicker ticket #1485. The current head implements the setup gate (seven fixed profiles, real inference probes, active-readiness blocking), the v2 config with migration, the typed workflow runtime with plan approval and session ownership, permission-gated tuning proposals, and the active/shadow/off mode surface. Persistent auto-routing, the Flicker adapter, and the pi-subagents execution adapter are the next vertical slices. The README and product are not described as complete until the parent acceptance matrix passes.
+**Status: in development.** This checkout implements the setup gate, persistent active routing, typed workflows with plan approval and session ownership, Flicker projection, pi-subagents delegation requests, dashboard surfaces, and permission-gated tuning proposals. All seven profiles currently pass real local 9Router probes. Live delegated-child execution and the complete Flicker/non-Flicker acceptance runs remain before Flicker ticket #1485 can be declared complete.
 
 ## Package layout
 
@@ -14,7 +14,8 @@
 - `src/workflow.ts` — typed coding-workflow planner/runtime, approval envelope, session store, ownership warnings.
 - `src/tuning.ts` — content-free outcome records, evidence-gated proposals, permissioned future-only application and rollback.
 - `src/flicker-adapter.ts` — Flicker project resolution, ticket/document/status projection.
-- `src/extension.ts` — Pi lifecycle observer, provider registration, commands, mode surface, and bounded model selection/restoration.
+- `src/execution.ts` — deterministic direct/delegated policy and ownership-tagged pi-subagents V2 request producer.
+- `src/extension.ts` — Pi lifecycle integration, provider registration, workflow commands, dashboard, and bounded model selection/restoration.
 - `src/telemetry.ts` — bounded content-free JSONL records.
 - `src/presentation.ts` — compact mode/status/explain/history/setup/workflow surfaces.
 
@@ -29,7 +30,7 @@ cp examples/pi-fusion.config.example.json ~/.pi/agent/extensions/pi-fusion.json
 
 The example targets the default keyless local 9Router endpoint at `http://127.0.0.1:20128/v1`. Omitting `provider.apiKey` is accepted only for loopback hosts (`127.0.0.1`, `localhost`, or `::1`); Pi receives a non-secret `local` sentinel because its provider registry requires a value, while catalogue discovery sends no Authorization header. For any non-loopback endpoint, set `provider.apiKey` to an environment-variable reference such as `$NINE_ROUTER_API_KEY` and export that variable before launching Pi. Literal credentials are always rejected, and a configured but missing environment variable is reported as an authentication error. `provider.id` must be `9router` or a `9router-*`/`9router_*`/`9router.*` namespace so the package cannot replace Pi's built-in providers.
 
-The shipped mappings match the observed local combos `fusion-explore`, `fusion-plan`, `fusion-research`, `fusion-reviewer`, `fusion-sidekick`, and `fusion-small`; `fusion-vision` and `fusion-design` are explicit user-created placeholders until those combos exist.
+The shipped mappings use the seven local combos `fusion-explore`, `fusion-sidekick`, `fusion-plan`, `fusion-reviewer`, `fusion-research`, `fusion-vision`, and `fusion-design`. 9Router owns each combo's provider/account fallback; Fusion only selects the semantic target.
 
 ## Configuration (v2)
 

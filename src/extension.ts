@@ -32,7 +32,7 @@ import {
   type AggregateUsage,
 } from "./telemetry.ts";
 import { diagnoseSetup, isActiveReady, loadSetupState, probeAll, saveSetupState, type SetupDiagnostic } from "./setup.ts";
-import { resolveFlickerProject, createPlanningTicket, syncFlickerStatus } from "./flicker-adapter.ts";
+import { resolveFlickerProject, createPlanningTicket, syncFlickerStatus, writeFlickerDocument } from "./flicker-adapter.ts";
 import {
   activeWorkflowForRepo,
   advanceWorkflow,
@@ -42,6 +42,8 @@ import {
   foreignOwnerForRepo,
   pauseWorkflow,
   resumeWorkflow,
+  retryBlockedWorkflow,
+  reopenWorkflowAt,
   runningNode,
   upsertWorkflow,
   type WorkflowState,
@@ -107,6 +109,56 @@ interface RuntimeState {
 
 type ActivePiModel = NonNullable<ExtensionContext["model"]>;
 type ActiveThinkingLevel = NonNullable<ExtensionContext["thinkingLevel"]>;
+
+const READ_ONLY_TOOLS = new Set([
+  "read", "grep", "find", "ls", "web_search", "source_check", "fetch_content", "get_search_content",
+]);
+const WRITER_TOOLS = new Set([...READ_ONLY_TOOLS, "bash", "edit", "write"]);
+const WRITER_NODE_KINDS = new Set(["implement", "regression"]);
+const GATED_SHELL_ACTION = /(?:\bgit\s+(?:push|merge|reset\s+--hard|clean\s+-[^\s]*f)|\bgh\s+(?:pr\s+(?:create|merge)|release)|\b(?:npm|pnpm)\s+publish|\byarn\s+npm\s+publish|\bmix\s+hex\.publish|\b(?:fly|flicker)\s+deploy|\bdocker\s+push|\bkubectl\s+(?:apply|delete|rollout\s+restart)|\bhelm\s+(?:install|upgrade|uninstall)|\bterraform\s+(?:apply|destroy)|\brm\s+-[^\s]*r[^\s]*f|\bflicker\s+ticket\s+complete)\b/i;
+
+function flickerTaskContractBody(workflow: WorkflowState): string {
+  const sequence = workflow.nodes.map((node) => node.kind).join(" → ");
+  return `## Goal\n\nExecute the approved Pi Fusion workflow \`${workflow.id}\` through local acceptance.\n\n## Scope and non-goals\n\nIn scope: ${sequence}. Non-goals: push, PR, merge, deploy, publish, release, and destructive actions without separate authority.\n\n## Affected surfaces and invariants\n\nRepository: \`${workflow.repo}\`. One writer: \`${workflow.envelope?.writer ?? "unassigned"}\`. Repository mutation requires this approved envelope; remote and release authority are absent.\n\n## Implementation sequence\n\n${workflow.nodes.map((node, index) => `${index + 1}. ${node.kind} via ${node.profile ?? "unassigned"}`).join("\n")}\n\n## Acceptance matrix\n\n| ID | Observable behavior | Verification | Expected result | Risk | Negative/error case |\n|---|---|---|---|---|---|\n| FUSION-WF | All graph nodes produce current evidence | Inspect workflow evidence and local Git state | Every required node passes; ticket remains in_progress without release authority | High | Missing evidence, provider failure, or stale downstream proof blocks |\n\n## Test strategy and fixtures\n\nUse node-specific tool evidence and a real local repository surface; regression must record successful verification-tool evidence.\n\n## Compatibility, rollback, and risk\n\nRetry/reopen is bounded by envelope v${workflow.envelope?.version ?? 0}; downstream evidence is invalidated when an upstream node reopens. Local Git history is the rollback surface.\n\n## Intentionally not done\n\nNo push, PR, merge, deploy, publish, release, or ticket completion.\n`;
+}
+
+function flickerImplementationNotesBody(workflow: WorkflowState): string {
+  return `## Workflow\n\n- Workflow: \`${workflow.id}\`\n- Approval envelope: v${workflow.envelope?.version ?? 0}\n- Writer: \`${workflow.envelope?.writer ?? "unassigned"}\`\n- Worktree: \`${workflow.envelope?.worktree ?? workflow.repo}\`\n- Authority: ${(workflow.envelope?.authority ?? []).join(", ") || "none"}\n\n## Node evidence\n\n${workflow.nodes.map((node) => `- ${node.kind} (${node.profile ?? "unassigned"}): ${node.status}; evidence: ${node.evidence.join(", ") || "none"}${node.error ? `; error: ${node.error}` : ""}`).join("\n")}\n\n## Commands and changed files\n\nFusion intentionally does not retain raw command text, raw tool output, prompts, or code in its local telemetry. Exact command text and changed-file names must be supplied by the repository/test harness when required; this projection records only allow-listed tool evidence.\n\n## Result\n\nLocal workflow status: **${workflow.status}**. The Flicker ticket remains **in_progress** because local completion is release readiness, not merged release completion.\n\n## Residual risk and intentionally not done\n\nNo remote, merge, deploy, publish, release, destructive action, or ticket completion was authorized or performed.\n`;
+}
+
+function toolBlockReason(options: {
+  activeMode: boolean;
+  ready: boolean;
+  classification: Classification | null;
+  workflow: WorkflowState | null;
+  toolName: string;
+  input: unknown;
+}): string | null {
+  if (!options.activeMode) return null;
+  const managedMutation = options.classification?.mutationIntent === "mutation" || options.workflow !== null;
+  if (!managedMutation || READ_ONLY_TOOLS.has(options.toolName)) return null;
+  if (!options.ready) return "Pi Fusion active setup is not ready; mutating tools are blocked";
+  if (!options.workflow) return "Pi Fusion has no approved workflow; mutating tools are blocked";
+  if (options.workflow.status === "awaiting-approval") return "Approve the Pi Fusion plan before repository mutation";
+  if (options.workflow.status !== "running") return `Pi Fusion workflow is ${options.workflow.status}; mutating tools are blocked`;
+
+  const node = runningNode(options.workflow);
+  if (!node || !WRITER_NODE_KINDS.has(node.kind)) {
+    return `Pi Fusion ${node?.kind ?? "unknown"} node is read-only; mutating tools are blocked`;
+  }
+  if (!WRITER_TOOLS.has(options.toolName)) {
+    return `Tool ${options.toolName} is outside the approved writer tool set`;
+  }
+  if (options.toolName === "bash") {
+    const command = typeof options.input === "object" && options.input !== null && "command" in options.input
+      ? String((options.input as { command?: unknown }).command ?? "")
+      : "";
+    if (GATED_SHELL_ACTION.test(command)) {
+      return "Remote, release, destructive, and completion actions require separate explicit authority";
+    }
+  }
+  return null;
+}
 
 function modelIdentity(ctx: ExtensionContext): ModelIdentity | null {
   return ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : null;
@@ -290,6 +342,8 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   }> = [];
   /** When the user explicitly overrides the model, auto-routing pauses until they rearm. */
   let userOverrideActive = false;
+  /** Allow-listed, content-free tool evidence collected for the current node turn. */
+  let turnEvidence = new Set<string>();
 
   const setActiveModel = (identity: ModelIdentity | null): void => {
     state.activeModel = displayModel(identity);
@@ -510,11 +564,18 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   const ensureWorkflow = async (ctx: ExtensionContext): Promise<void> => {
     if (state.config.status !== "ready" || !state.classification) return;
     if (state.classification.mutationIntent !== "mutation") {
+      // A read-only continuation must not discard an already approved workflow.
+      // It can advance the current read-only node while preserving the same
+      // session ownership and approval envelope.
+      if (workflow && (workflow.status === "running" || workflow.status === "awaiting-approval" || workflow.status === "paused" || workflow.status === "blocked" || workflow.status === "recovered")) {
+        state.workflow = workflow;
+        return;
+      }
       workflow = null;
       state.workflow = null;
       return;
     }
-    if (workflow && (workflow.status === "running" || workflow.status === "awaiting-approval" || workflow.status === "paused")) return;
+    if (workflow && (workflow.status === "running" || workflow.status === "awaiting-approval" || workflow.status === "paused" || workflow.status === "blocked" || workflow.status === "recovered")) return;
     const repo = ctx.cwd;
     const foreign = await foreignOwnerForRepo(repo, getSessionId(ctx), storePath);
     state.foreignOwner = foreign !== null;
@@ -566,8 +627,12 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     }
   };
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
     setActiveModel(modelIdentity(ctx));
+    const ownerSession = getSessionId(ctx);
+    workflow = await activeWorkflowForRepo(ctx.cwd, ownerSession, storePath);
+    state.workflow = workflow;
+    state.foreignOwner = (await foreignOwnerForRepo(ctx.cwd, ownerSession, storePath)) !== null;
     updateFooter(state, ctx);
   });
 
@@ -582,6 +647,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     state.startedAt = clock();
     state.usage = {};
     state.outcome = "unknown";
+    turnEvidence = new Set<string>();
     reroute();
 
     const config = state.config;
@@ -712,7 +778,11 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       reroute();
     }
     state.usage = mergeUsage(state.usage, sanitizeUsage(event.usage));
-    if (event.isError) state.outcome = "error";
+    if (event.isError) {
+      state.outcome = "error";
+    } else if (["read", "bash", "edit", "write"].includes(event.toolName)) {
+      turnEvidence.add(`tool:${event.toolName}:ok`);
+    }
     updateFooter(state, ctx);
   });
 
@@ -782,6 +852,21 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     }
   });
 
+  pi.on("tool_call", async (event) => {
+    const config = state.config;
+    const activeMode = config.status === "ready" && config.config.mode === "active";
+    const ready = activeMode && setup !== null && isActiveReady(config.config, setup);
+    const reason = toolBlockReason({
+      activeMode,
+      ready,
+      classification: state.classification,
+      workflow,
+      toolName: event.toolName,
+      input: event.input,
+    });
+    if (reason) return { block: true, reason, terminate: true };
+  });
+
   pi.on("agent_settled", async (_event, ctx) => {
     // Capture the settled outcome BEFORE finishOneShot: persist() resets
     // state.outcome to "unknown", so evaluating it afterwards would always
@@ -793,12 +878,32 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     if (state.config.status === "ready" && state.config.config.mode === "active" && workflow && workflow.status === "running") {
       const node = runningNode(workflow);
       if (node) {
+        if (turnEvidence.size > 0) {
+          workflow = {
+            ...workflow,
+            nodes: workflow.nodes.map((item) => item.id === node.id
+              ? { ...item, evidence: [...new Set([...item.evidence, ...turnEvidence])] }
+              : item),
+          };
+        }
         workflow = advanceWorkflow(workflow, node.id, settledOutcome === "error" ? "failed" : "passed", settledOutcome === "error" ? "provider/tool error" : undefined);
         state.workflow = workflow;
         await persistWorkflowState();
       }
       if ((workflow.status === "complete" || workflow.status === "blocked") && workflow.adapter === "flicker" && workflow.flickerTicketId) {
-        await syncFlickerStatus(workflow.flickerTicketId, workflow.status, { env: environment }).catch(() => undefined);
+        const sync = await syncFlickerStatus(workflow.flickerTicketId, workflow.status, { env: environment });
+        if (!sync.ok) {
+          workflow = { ...workflow, status: "blocked", updatedAt: new Date().toISOString() };
+          state.workflow = workflow;
+          await persistWorkflowState();
+        } else if (workflow.status === "complete") {
+          const written = await writeFlickerDocument(workflow.flickerTicketId, "implementation_notes", "Pi Fusion implementation evidence", flickerImplementationNotesBody(workflow), { env: environment });
+          if (!written.ok) {
+            workflow = { ...workflow, status: "blocked", updatedAt: new Date().toISOString() };
+            state.workflow = workflow;
+            await persistWorkflowState();
+          }
+        }
       }
       await recordActiveOutcome(node, settledOutcome);
     }
@@ -945,7 +1050,17 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       state.workflow = workflow;
       await persistWorkflowState();
       if (workflow.adapter === "flicker" && workflow.flickerTicketId) {
-        await syncFlickerStatus(workflow.flickerTicketId, workflow.status, { env: environment }).catch(() => undefined);
+        const sync = await syncFlickerStatus(workflow.flickerTicketId, workflow.status, { env: environment });
+        const written = sync.ok
+          ? await writeFlickerDocument(workflow.flickerTicketId, "task_contract", "Pi Fusion task contract", flickerTaskContractBody(workflow), { env: environment })
+          : { ok: false, error: sync.error };
+        if (!written.ok) {
+          workflow = { ...workflow, status: "blocked", updatedAt: new Date().toISOString() };
+          state.workflow = workflow;
+          await persistWorkflowState();
+          report(ctx, `fusion plan: Flicker projection blocked · ${written.error ?? "unknown error"}`, "warning");
+          return;
+        }
       }
       userOverrideActive = false;
       report(ctx, `fusion plan: approved · envelope v${workflow.envelope?.version} · running`);
@@ -966,13 +1081,32 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     },
   });
   pi.registerCommand("fusion-resume", {
-    description: "Resume a paused workflow",
-    handler: async (_args, ctx) => {
+    description: "Resume a paused workflow or retry a blocked node within its approved budget",
+    handler: async (args, ctx) => {
       if (!workflow) { report(ctx, "fusion resume: no active workflow", "warning"); return; }
-      workflow = resumeWorkflow(workflow);
+      const previousStatus = workflow.status;
+      let reopenedKind: WorkflowNode["kind"] | null = null;
+      if (previousStatus === "blocked") {
+        const maxRetries = workflow.envelope?.maxRetries ?? 0;
+        const requested = firstArg(args);
+        if (requested && workflow.nodes.some((node) => node.kind === requested)) {
+          reopenedKind = requested as WorkflowNode["kind"];
+          workflow = reopenWorkflowAt(workflow, reopenedKind, maxRetries);
+        } else {
+          workflow = retryBlockedWorkflow(workflow, maxRetries);
+        }
+        if (workflow.status === "blocked") {
+          report(ctx, "fusion resume: retry budget exhausted or no matching failed node", "warning");
+          return;
+        }
+      } else {
+        workflow = resumeWorkflow(workflow);
+      }
       state.workflow = workflow;
       await persistWorkflowState();
-      report(ctx, "fusion resume: workflow resumed");
+      report(ctx, previousStatus === "blocked"
+        ? reopenedKind ? `fusion resume: reopened ${reopenedKind}; downstream evidence invalidated` : "fusion resume: blocked node retrying"
+        : "fusion resume: workflow resumed");
     },
   });
   pi.registerCommand("fusion-cancel", {

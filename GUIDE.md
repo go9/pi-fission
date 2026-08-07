@@ -1,6 +1,6 @@
 # Pi Fusion — Setup & Usage Guide
 
-Pi Fusion is a **Pi extension** that routes your coding work to semantic 9Router profiles and drives a managed workflow (plan → approve → implement → review → test) from inside Pi. Current head: `009f6e8` (branch `feat/pi-fusion-active-once`).
+Pi Fusion is a **Pi extension** that routes coding work to semantic 9Router profiles and drives a managed workflow (plan → approve → implement → review → test) from inside Pi.
 
 ---
 
@@ -13,7 +13,7 @@ Pi Fusion is a **Pi extension** that routes your coding work to semantic 9Router
 | 9Router API key in Keychain | service `pi-fusion-9router`, account `$USER` | ✅ present |
 | `NINE_ROUTER_API_KEY` env | sourced from `~/.config/pi-fusion/env.zsh` via `~/.zshenv` | ✅ |
 | Pi Fusion package | `~/.pi/agent/settings.json` → `../../Sites/pi-fusion-active-once` | ✅ installed |
-| Config | `~/.pi/agent/extensions/pi-fusion.json` (v1, auto-migrates to v2) | ✅ |
+| Config | `~/.pi/agent/extensions/pi-fusion.json` (v2) | ✅ |
 
 If any are missing:
 
@@ -55,9 +55,7 @@ Every command below works from the Pi prompt (TUI) or print mode:
 
 `/fusion-setup` probes each of the seven profiles (`fast`, `code`, `reason`, `review`, `research`, `vision`, `design`) with a real `chat/completions` call that must return exactly `OK`.
 
-**Important (current state):** your local 9Router catalogue is missing `fusion-vision` and `fusion-design`, and `fusion-explore`/`fusion-sidekick`/`fusion-reviewer` currently fail probes (empty text / HTTP 400). So **active mode is blocked until those combos exist and pass**. This is by design — Pi Fusion refuses to be "active" on unproven routes.
-
-To fix the catalogue, create/adjust combos in the 9Router dashboard (`http://localhost:20128/dashboard` → Combos) named `fusion-vision`, `fusion-design`, etc., then re-run `/fusion-setup`. Two profiles (`reason`, `research`) already pass.
+**Current local state:** all seven semantic combos exist and pass real probes. `/fusion-setup-status` reports `complete · active ready`, and the persisted mode is `active`. Re-run `/fusion-setup` after changing a combo, profile mapping, credential, or project override; stale probe targets do not count as ready.
 
 ---
 
@@ -75,7 +73,7 @@ To fix the catalogue, create/adjust combos in the 9Router dashboard (`http://loc
 
 ---
 
-## 4. Shadow mode (safe to use right now)
+## 4. Shadow mode
 
 ```text
 /fusion-status          → mode, setup, workflow, recommendation
@@ -99,7 +97,7 @@ The arm is consumed before selection, never stacks, and restores your exact prio
 
 ## 5. Active mode (the managed workflow)
 
-Once `/fusion-setup` reports **complete**, enable active mode and drive a workflow:
+After `/fusion-setup` reports **complete**, enable active mode and drive a workflow:
 
 ```text
 /fusion-mode active
@@ -139,7 +137,7 @@ Shows the backend decision for the current workflow node:
 - **read-only specialists** (explore/research/review/plan-review) → `delegated` (fresh context, under the fanout cap)
 - **writer work** (implement/regression) → `direct` (one writer)
 
-In active mode with a running node it emits a V2 delegation request over Pi's event bus with ownership ids, explicit model, budgets, and duplicate detection. Full live child execution is the remaining slice.
+In active mode with a running node it emits a V2 delegation request over Pi's event bus with ownership ids, explicit model, budgets, cancellation, timeout, and duplicate detection. Live delegated-child acceptance remains a release-evidence item.
 
 ---
 
@@ -191,12 +189,12 @@ The extension never edits your repos or Flicker state without the workflow/plan 
 ```bash
 cd ~/Sites/pi-fusion-active-once
 PATH="$HOME/.local/share/mise/installs/node/24.6.0/bin:$PATH" npm run typecheck
-PATH="$HOME/.local/share/mise/installs/node/24.6.0/bin:$PATH" npm test            # 76 tests
-PATH="$HOME/.local/share/mise/installs/node/24.6.0/bin:$PATH" npm run test:integration  # 28 tests
+PATH="$HOME/.local/share/mise/installs/node/24.6.0/bin:$PATH" npm test            # 84 tests
+PATH="$HOME/.local/share/mise/installs/node/24.6.0/bin:$PATH" npm run test:integration  # 29 tests
 ```
 
 ## Current limitations (honest)
 
-1. **Setup is blocked** until `vision`/`design` combos exist in 9Router and `fast`/`code`/`review` combos pass probes.
-2. **Live Flicker E2E** and **live pi-subagents child execution** are wired + unit-tested but not yet proven end-to-end.
-3. The parent ticket #1485 remains `in_progress`; the product is not declared complete.
+1. **Live Flicker E2E** and **live pi-subagents child execution** are wired and regression-tested but not yet proven through their complete real acceptance protocols.
+2. The full isolated install → migration → upgrade → rollback → uninstall protocol is still release evidence in progress.
+3. Parent ticket #1485 remains open; the product is not declared complete until its acceptance matrix passes.

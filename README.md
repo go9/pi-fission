@@ -2,7 +2,7 @@
 
 `pi-fusion` is a standalone Pi package implementing the **full-product control plane**: it classifies coding work, routes each request and workflow phase to a semantic 9Router profile, orchestrates the software-delivery lifecycle, delegates only when fresh context or independent/parallel work is valuable, and learns from outcomes through permission-gated tuning proposals.
 
-**Status: in development.** This checkout implements the setup gate, persistent active routing, typed workflows with plan approval and session ownership, Flicker projection, pi-subagents delegation requests, dashboard surfaces, and permission-gated tuning proposals. All seven profiles currently pass real local 9Router probes. Live delegated-child execution and the complete Flicker/non-Flicker acceptance runs remain before Flicker ticket #1485 can be declared complete.
+**Status: in development.** This checkout implements the setup gate, persistent active routing, approval/tool authority enforcement, sandboxed local execution evidence, crash-safe workflow/Flicker projection, pi-subagents V2 structured delegation, dashboard surfaces, and permission-gated tuning proposals. All seven profiles pass real local 9Router probes; current-head Flicker and non-Flicker workflows and the isolated package lifecycle have been exercised. Flicker #1485 is not complete: persistent pins, a separate fixed writer backend, fully enforced orchestration budgets, complete authority/dashboard provenance, operational tuning application, and full evidence-document projection remain deferred.
 
 ## Package layout
 

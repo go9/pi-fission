@@ -52,6 +52,7 @@ interface RuntimeState {
 }
 
 type ActivePiModel = NonNullable<ExtensionContext["model"]>;
+type ActiveThinkingLevel = NonNullable<ExtensionContext["thinkingLevel"]>;
 
 function modelIdentity(ctx: ExtensionContext): ModelIdentity | null {
   return ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : null;
@@ -198,6 +199,15 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   let restorationInProgress = false;
   let restorationPromise: Promise<void> | null = null;
   let userSelectionDuringRestore: ActivePiModel | null = null;
+  let restoreThinkingLevel: ActiveThinkingLevel | null = null;
+  let userThinkingLevel: ActiveThinkingLevel | null = null;
+  let expectedInternalThinkingLevel: ActiveThinkingLevel | null = null;
+  let activeInternalThinkingStart: ActiveThinkingLevel | null = null;
+  let activeInternalThinkingObserved = false;
+  let pendingInternalThinkingTransitions: Array<{
+    previousLevel: ActiveThinkingLevel;
+    level: ActiveThinkingLevel;
+  }> = [];
 
   const setActiveModel = (identity: ModelIdentity | null): void => {
     state.activeModel = displayModel(identity);
@@ -246,19 +256,63 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     return selected;
   };
 
+  const readThinkingLevel = (ctx?: ExtensionContext): ActiveThinkingLevel | null => {
+    if (ctx?.thinkingLevel) return ctx.thinkingLevel;
+    try {
+      return pi.getThinkingLevel();
+    } catch {
+      return null;
+    }
+  };
+
+  const selectInternalModel = async (model: ActivePiModel): Promise<boolean> => {
+    const before = readThinkingLevel();
+    activeInternalThinkingStart = before;
+    activeInternalThinkingObserved = false;
+    try {
+      return await pi.setModel(model);
+    } finally {
+      const after = readThinkingLevel();
+      if (before && after && before !== after && !activeInternalThinkingObserved) {
+        // Pi dispatches thinking_level_select without awaiting it. Retain the exact
+        // transition so a late host event is not mistaken for user intent.
+        pendingInternalThinkingTransitions.push({ previousLevel: before, level: after });
+      }
+      activeInternalThinkingStart = null;
+      activeInternalThinkingObserved = false;
+    }
+  };
+
+  const applyInternalThinkingLevel = async (level: ActiveThinkingLevel): Promise<boolean> => {
+    expectedInternalThinkingLevel = level;
+    try {
+      pi.setThinkingLevel(level);
+      // Pi emits thinking_level_select asynchronously. Let its synchronous/microtask
+      // dispatch consume the guard before accepting a later user selection.
+      await Promise.resolve();
+      const observed = readThinkingLevel();
+      return observed === null || observed === level;
+    } catch {
+      return false;
+    } finally {
+      if (expectedInternalThinkingLevel === level) expectedInternalThinkingLevel = null;
+    }
+  };
+
   const restoreOneShot = async (ctx: ExtensionContext): Promise<void> => {
     if (restorationPromise) return restorationPromise;
     if (!routeOnceActive) return;
 
     restorationPromise = (async () => {
       const previous = restoreModel;
+      const originalThinking = restoreThinkingLevel;
       let restored = false;
       if (previous && routeChangedModel) {
         restorationInProgress = true;
         userSelectionDuringRestore = null;
         expectedInternalSelection = { provider: previous.provider, id: previous.id };
         try {
-          restored = await pi.setModel(previous);
+          restored = await selectInternalModel(previous);
         } catch {
           restored = false;
         }
@@ -269,7 +323,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
           expectedInternalSelection = { provider: userSelection.provider, id: userSelection.id };
           let retained = false;
           try {
-            retained = await pi.setModel(userSelection);
+            retained = await selectInternalModel(userSelection);
           } catch {
             retained = false;
           }
@@ -298,6 +352,15 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
             state.routeOnceReason = "restore-failed";
           }
         }
+
+        if (restored && state.routeOnceStatus !== "restore-failed") {
+          const userModelWon = state.routeOnceStatus === "user-overrode";
+          const desiredThinking = userThinkingLevel ?? (userModelWon ? null : originalThinking);
+          if (desiredThinking && !(await applyInternalThinkingLevel(desiredThinking))) {
+            state.routeOnceStatus = "restore-failed";
+            state.routeOnceReason = "restore-failed";
+          }
+        }
       } else if (previous) {
         // The recommended model was already current; the run is still one active
         // one-shot transaction, but settlement requires no model API call.
@@ -309,7 +372,13 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       routeOnceActive = false;
       routeChangedModel = false;
       restoreModel = null;
+      restoreThinkingLevel = null;
+      userThinkingLevel = null;
       expectedInternalSelection = null;
+      expectedInternalThinkingLevel = null;
+      activeInternalThinkingStart = null;
+      activeInternalThinkingObserved = false;
+      pendingInternalThinkingTransitions = [];
       restorationInProgress = false;
       userSelectionDuringRestore = null;
     })();
@@ -402,24 +471,35 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       return;
     }
 
+    const previousThinking = readThinkingLevel(ctx);
     expectedInternalSelection = { provider: target.provider, id: target.id };
     let selected = false;
     try {
-      selected = await pi.setModel(target);
+      selected = await selectInternalModel(target);
     } catch {
       expectedInternalSelection = null;
+      if (previousThinking && readThinkingLevel() !== previousThinking) {
+        await applyInternalThinkingLevel(previousThinking);
+      }
+      pendingInternalThinkingTransitions = [];
       state.routeOnceReason = "selection-error";
       updateFooter(state, ctx);
       return;
     }
     if (!selected) {
       expectedInternalSelection = null;
+      if (previousThinking && readThinkingLevel() !== previousThinking) {
+        await applyInternalThinkingLevel(previousThinking);
+      }
+      pendingInternalThinkingTransitions = [];
       state.routeOnceReason = "selection-failed";
       updateFooter(state, ctx);
       return;
     }
 
     restoreModel = previous;
+    restoreThinkingLevel = previousThinking;
+    userThinkingLevel = null;
     routeOnceActive = true;
     routeChangedModel = true;
     deferTelemetryUntilSettled = true;
@@ -469,12 +549,34 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       // A user choice during the routed run cancels stale restoration, but the
       // one-shot remains active until settlement so another arm cannot stack.
       restoreModel = null;
+      restoreThinkingLevel = null;
+      userThinkingLevel = null;
       routeChangedModel = false;
       state.routeOnceStatus = "user-overrode";
       state.routeOnceReason = "user-selected-model";
     }
     setActiveModel(selected);
     updateFooter(state, ctx);
+  });
+
+  pi.on("thinking_level_select", (event) => {
+    const internalExplicit = expectedInternalThinkingLevel === event.level;
+    const activeInternalClamp = expectedInternalSelection !== null
+      && activeInternalThinkingStart === event.previousLevel
+      && !activeInternalThinkingObserved;
+    const pendingIndex = pendingInternalThinkingTransitions.findIndex((transition) =>
+      transition.previousLevel === event.previousLevel && transition.level === event.level);
+    if (internalExplicit) {
+      expectedInternalThinkingLevel = null;
+    } else if (activeInternalClamp) {
+      activeInternalThinkingObserved = true;
+    } else if (pendingIndex >= 0) {
+      pendingInternalThinkingTransitions.splice(pendingIndex, 1);
+    } else if (routeOnceActive || restorationInProgress) {
+      // Model-induced clamp events are consumed above even if Pi dispatches them
+      // late. Any other selection during the transaction is explicit user intent.
+      userThinkingLevel = event.level;
+    }
   });
 
   pi.on("agent_settled", async (_event, ctx) => {

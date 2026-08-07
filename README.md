@@ -1,6 +1,6 @@
 # pi-fusion
 
-`pi-fusion` is a standalone Pi package that observes a parent Pi session and recommends a semantic 9Router profile. It remains **shadow mode by default**. The only active path is an explicit, in-memory `/fusion-route-once` arm for exactly the next eligible task; after that full agent run settles, Pi Fusion restores the exact model that was active before the test. It never changes thinking level, delegates work, changes prompts or tool results, edits project files, or changes workflow/release state.
+`pi-fusion` is a standalone Pi package that observes a parent Pi session and recommends a semantic 9Router profile. It remains **shadow mode by default**. The only active path is an explicit, in-memory `/fusion-route-once` arm for exactly the next eligible task; after that full agent run settles, Pi Fusion restores the exact model and thinking preference that were active before the test. Pi Fusion does not choose or route thinking levels: Pi may temporarily clamp the current preference when the one-shot changes models, and Fusion restores it unless the user explicitly selects a different level. It never delegates work, changes prompts or tool results, edits project files, or changes workflow/release state.
 
 Canonical profiles are `pi-fast`, `pi-code`, `pi-reason`, `pi-review`, `pi-research`, and `pi-vision`. Configurable aliases let a 9Router catalogue expose names such as `plan`, `sidekick`, `explore`, or `small-model` while policy remains canonical and capability checked.
 

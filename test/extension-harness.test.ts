@@ -18,6 +18,7 @@ function fakeContext(
   mode: Mode = "tui",
   model = { id: "actually-active", provider: "existing" },
   models: any[] = [],
+  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max",
 ): ExtensionContext {
   const failPrompt = (): never => { throw new Error("shadow extension attempted to prompt"); };
   return {
@@ -25,6 +26,7 @@ function fakeContext(
     hasUI: mode === "tui" || mode === "rpc",
     cwd,
     model,
+    ...(thinkingLevel ? { thinkingLevel } : {}),
     modelRegistry: {
       find: (provider: string, id: string) => models.find((item) => item.provider === provider && item.id === id),
     },
@@ -45,12 +47,18 @@ async function snapshot(path: string): Promise<Record<string, string>> {
   return result;
 }
 
-function fakeApi(options: { setModel?: (model: any, callIndex: number) => boolean | Promise<boolean> } = {}) {
+function fakeApi(options: {
+  setModel?: (model: any, callIndex: number) => boolean | Promise<boolean>;
+  initialThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  clampThinkingForModel?: (model: any, current: string, callIndex: number) => string;
+} = {}) {
   const handlers = new Map<string, Handler[]>();
   const commands = new Map<string, CommandHandler>();
   const providers: Array<{ name: string; provider: any }> = [];
   const forbiddenCalls: string[] = [];
   const selectionCalls: any[] = [];
+  const thinkingCalls: string[] = [];
+  let thinkingLevel = options.initialThinkingLevel ?? "high";
   const api = {
     on(name: string, handler: Handler) {
       const list = handlers.get(name) ?? [];
@@ -61,9 +69,18 @@ function fakeApi(options: { setModel?: (model: any, callIndex: number) => boolea
     registerProvider(name: string, provider: unknown) { providers.push({ name, provider }); },
     async setModel(model: any) {
       selectionCalls.push(model);
-      return await (options.setModel?.(model, selectionCalls.length - 1) ?? true);
+      const callIndex = selectionCalls.length - 1;
+      const selected = await (options.setModel?.(model, callIndex) ?? true);
+      if (selected && options.clampThinkingForModel) {
+        thinkingLevel = options.clampThinkingForModel(model, thinkingLevel, callIndex) as typeof thinkingLevel;
+      }
+      return selected;
     },
-    setThinkingLevel() { forbiddenCalls.push("setThinkingLevel"); },
+    getThinkingLevel() { return thinkingLevel; },
+    setThinkingLevel(level: typeof thinkingLevel) {
+      thinkingCalls.push(level);
+      thinkingLevel = level;
+    },
     sendMessage() { forbiddenCalls.push("sendMessage"); },
     sendUserMessage() { forbiddenCalls.push("sendUserMessage/delegation"); },
     registerTool() { forbiddenCalls.push("registerTool/delegation"); },
@@ -73,7 +90,11 @@ function fakeApi(options: { setModel?: (model: any, callIndex: number) => boolea
     startWorkflow() { forbiddenCalls.push("workflow"); },
     release() { forbiddenCalls.push("release"); },
   } as unknown as ExtensionAPI;
-  return { api, handlers, commands, providers, forbiddenCalls, selectionCalls };
+  return {
+    api, handlers, commands, providers, forbiddenCalls, selectionCalls, thinkingCalls,
+    setThinkingLevelFromUser(level: typeof thinkingLevel) { thinkingLevel = level; },
+    get thinkingLevel() { return thinkingLevel; },
+  };
 }
 
 async function emit(handlers: Map<string, Handler[]>, context: ExtensionContext, name: string, event: any): Promise<void> {
@@ -127,7 +148,7 @@ describe("Pi observer extension shadow mode", () => {
       assert.equal(registeredCode.contextWindow, 32_000, "known discovered context constrains registration");
       assert.equal(registeredCode.reasoning, true, "unknown discovered reasoning retains explicit configured floor");
       assert.deepEqual([...runtime.commands.keys()].sort(), ["fusion-config", "fusion-explain", "fusion-history", "fusion-route-once", "fusion-status"]);
-      for (const event of ["agent_settled", "before_agent_start", "tool_result", "turn_end", "model_select", "after_provider_response", "session_start", "session_shutdown"]) {
+      for (const event of ["agent_settled", "before_agent_start", "tool_result", "turn_end", "model_select", "thinking_level_select", "after_provider_response", "session_start", "session_shutdown"]) {
         assert.ok(runtime.handlers.has(event), `registered ${event}`);
       }
 
@@ -167,6 +188,7 @@ describe("Pi observer extension shadow mode", () => {
 
       assert.deepEqual(runtime.forbiddenCalls, []);
       assert.deepEqual(runtime.selectionCalls, [], "shadow requests never select a model");
+      assert.deepEqual(runtime.thinkingCalls, [], "shadow mode never chooses or changes thinking levels");
       assert.deepEqual(await snapshot(projectDir), before, "project/source files remain byte-for-byte unchanged");
       const telemetry = await readFile(join(agentDir, "telemetry.jsonl"), "utf8");
       for (const sentinel of ["PROMPT_SENTINEL", "SYSTEM_SENTINEL", "SOURCE_SENTINEL", "TOOL_OUTPUT_SENTINEL", "CREDENTIAL_SENTINEL", "tenant-a/private-deployment"]) {
@@ -313,7 +335,11 @@ describe("Pi observer extension shadow mode", () => {
   });
 });
 
-async function readyOneShotRuntime(setModel?: (model: any, callIndex: number) => boolean | Promise<boolean>) {
+type FakeApiOptions = Parameters<typeof fakeApi>[0];
+
+async function readyOneShotRuntime(
+  setModelOrOptions?: ((model: any, callIndex: number) => boolean | Promise<boolean>) | FakeApiOptions,
+) {
   const mock = await listen((_request, response) => {
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify({ data: [
@@ -323,7 +349,9 @@ async function readyOneShotRuntime(setModel?: (model: any, callIndex: number) =>
   });
   const config = validConfig({ provider: { ...validConfig().provider, baseUrl: mock.baseUrl } });
   const written = await writeConfig(config);
-  const runtime = fakeApi({ ...(setModel ? { setModel } : {}) });
+  const runtime = fakeApi(typeof setModelOrOptions === "function"
+    ? { setModel: setModelOrOptions }
+    : setModelOrOptions);
   await createFusionExtension(runtime.api, {
     configPath: written.path,
     env: { TEST_9ROUTER_KEY: "CREDENTIAL_SENTINEL" },
@@ -368,6 +396,81 @@ describe("Pi Fusion one-shot active routing", () => {
       await emit(fixture.runtime.handlers, context, "before_agent_start", { prompt: "Plan another architecture", images: [] });
       assert.equal(fixture.runtime.selectionCalls.length, 2, "the next request returns to shadow mode");
       assert.deepEqual(fixture.runtime.forbiddenCalls, []);
+    } finally {
+      await fixture.mock.close();
+    }
+  });
+
+  it("restores an xhigh thinking preference after the routed model clamps it to high", async () => {
+    const fixture = await readyOneShotRuntime({
+      initialThinkingLevel: "xhigh",
+      clampThinkingForModel: (model, current) => model.provider === "9router" ? "high" : current,
+    });
+    const previous = { id: "xhigh-base", provider: "existing", name: "XHigh Base" };
+    const context = fakeContext(tmpdir(), [], "tui", previous, fixture.models, "xhigh");
+    try {
+      await fixture.runtime.commands.get("fusion-route-once")?.("", context);
+      await emit(fixture.runtime.handlers, context, "before_agent_start", {
+        prompt: "Plan a small implementation", images: [],
+      });
+      assert.equal(fixture.runtime.thinkingLevel, "high", "native model switch clamps xhigh to target maximum");
+      const target = fixture.runtime.selectionCalls[0];
+      await emit(fixture.runtime.handlers, context, "thinking_level_select", {
+        level: "high", previousLevel: "xhigh",
+      });
+      await emit(fixture.runtime.handlers, context, "model_select", {
+        model: target, previousModel: previous, source: "set",
+      });
+      (context as any).model = target;
+
+      await emit(fixture.runtime.handlers, context, "agent_settled", {});
+      assert.equal(fixture.runtime.selectionCalls[1], previous);
+      assert.deepEqual(fixture.runtime.thinkingCalls, ["xhigh"], "one-shot restores but never chooses a new thinking level");
+      assert.equal(fixture.runtime.thinkingLevel, "xhigh");
+    } finally {
+      await fixture.mock.close();
+    }
+  });
+
+  it("keeps an explicit user thinking selection made during delayed restoration", async () => {
+    const restoreGate = deferred<boolean>();
+    const fixture = await readyOneShotRuntime({
+      initialThinkingLevel: "xhigh",
+      setModel: (_model, callIndex) => callIndex === 1 ? restoreGate.promise : true,
+      clampThinkingForModel: (model, current) => model.provider === "9router" ? "high" : current,
+    });
+    const previous = { id: "xhigh-base", provider: "existing", name: "XHigh Base" };
+    const context = fakeContext(tmpdir(), [], "tui", previous, fixture.models, "xhigh");
+    try {
+      await fixture.runtime.commands.get("fusion-route-once")?.("", context);
+      await emit(fixture.runtime.handlers, context, "before_agent_start", {
+        prompt: "implement a small code fix", images: [],
+      });
+      const target = fixture.runtime.selectionCalls[0];
+      await emit(fixture.runtime.handlers, context, "thinking_level_select", {
+        level: "high", previousLevel: "xhigh",
+      });
+      await emit(fixture.runtime.handlers, context, "model_select", {
+        model: target, previousModel: previous, source: "set",
+      });
+      (context as any).model = target;
+
+      const settling = emit(fixture.runtime.handlers, context, "agent_settled", {});
+      await waitFor(() => fixture.runtime.selectionCalls.length === 2);
+      // Native restore events are internal even though setModel is still awaiting
+      // other extension handlers.
+      await emit(fixture.runtime.handlers, context, "model_select", {
+        model: previous, previousModel: target, source: "set",
+      });
+      fixture.runtime.setThinkingLevelFromUser("medium");
+      await emit(fixture.runtime.handlers, context, "thinking_level_select", {
+        level: "medium", previousLevel: "high",
+      });
+      restoreGate.resolve(true);
+      await settling;
+
+      assert.equal(fixture.runtime.thinkingLevel, "medium", "latest explicit user level remains final");
+      assert.deepEqual(fixture.runtime.thinkingCalls, ["medium"], "extension reapplies user intent instead of original xhigh");
     } finally {
       await fixture.mock.close();
     }
@@ -475,11 +578,14 @@ describe("Pi Fusion one-shot active routing", () => {
     }
   });
 
-  it("restores on normal session shutdown before agent settlement", async () => {
-    const fixture = await readyOneShotRuntime();
+  it("restores model and thinking on normal session shutdown before agent settlement", async () => {
+    const fixture = await readyOneShotRuntime({
+      initialThinkingLevel: "xhigh",
+      clampThinkingForModel: (model, current) => model.provider === "9router" ? "high" : current,
+    });
     const notifications: string[] = [];
     const previous = { id: "current", provider: "existing", name: "Existing" };
-    const context = fakeContext(tmpdir(), notifications, "tui", previous, fixture.models);
+    const context = fakeContext(tmpdir(), notifications, "tui", previous, fixture.models, "xhigh");
     try {
       await fixture.runtime.commands.get("fusion-route-once")?.("", context);
       await emit(fixture.runtime.handlers, context, "before_agent_start", {
@@ -497,6 +603,8 @@ describe("Pi Fusion one-shot active routing", () => {
       await emit(fixture.runtime.handlers, context, "session_shutdown", {});
       assert.equal(fixture.runtime.selectionCalls.length, 2);
       assert.equal(fixture.runtime.selectionCalls[1], previous, "shutdown awaits exact prior-model restoration");
+      assert.equal(fixture.runtime.thinkingLevel, "xhigh", "shutdown restores the exact prior thinking preference");
+      assert.deepEqual(fixture.runtime.thinkingCalls, ["xhigh"]);
       assert.ok(notifications.includes("status:pi-fusion:cleared"));
 
       await emit(fixture.runtime.handlers, context, "agent_settled", {});
@@ -534,6 +642,7 @@ describe("Pi Fusion one-shot active routing", () => {
 
       await emit(fixture.runtime.handlers, context, "agent_settled", {});
       assert.equal(fixture.runtime.selectionCalls.length, 0, "same-target settlement requires no restoration call");
+      assert.deepEqual(fixture.runtime.thinkingCalls, [], "same-target one-shot does not touch thinking");
       const telemetry = await readFile(join(fixture.written.dir, "telemetry.jsonl"), "utf8");
       assert.equal(telemetry.trim().split("\n").length, 1, "one settled run creates one telemetry record");
       assert.match(telemetry, /"routeOnceStatus":"restored"/);
@@ -545,11 +654,15 @@ describe("Pi Fusion one-shot active routing", () => {
     }
   });
 
-  it("surfaces a non-throwing restoration failure", async () => {
-    const fixture = await readyOneShotRuntime((_model, callIndex) => callIndex === 0);
+  it("surfaces a non-throwing restoration failure without forcing thinking on the routed model", async () => {
+    const fixture = await readyOneShotRuntime({
+      initialThinkingLevel: "xhigh",
+      setModel: (_model, callIndex) => callIndex === 0,
+      clampThinkingForModel: (model, current) => model.provider === "9router" ? "high" : current,
+    });
     const notifications: string[] = [];
     const previous = { id: "current", provider: "existing" };
-    const context = fakeContext(tmpdir(), notifications, "tui", previous, fixture.models);
+    const context = fakeContext(tmpdir(), notifications, "tui", previous, fixture.models, "xhigh");
     try {
       await fixture.runtime.commands.get("fusion-route-once")?.("", context);
       await emit(fixture.runtime.handlers, context, "before_agent_start", { prompt: "implement a code fix", images: [] });
@@ -561,6 +674,8 @@ describe("Pi Fusion one-shot active routing", () => {
       assert.equal(fixture.runtime.selectionCalls.length, 2);
       await fixture.runtime.commands.get("fusion-status")?.("", context);
       assert.ok(notifications.some((line) => line.includes("restore-failed")));
+      assert.equal(fixture.runtime.thinkingLevel, "high", "failed model restore does not force unsupported xhigh on routed model");
+      assert.deepEqual(fixture.runtime.thinkingCalls, []);
       const telemetry = await readFile(join(fixture.written.dir, "telemetry.jsonl"), "utf8");
       assert.match(telemetry, /"routeOnceStatus":"restore-failed"/);
     } finally {

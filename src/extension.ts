@@ -57,6 +57,7 @@ import {
   type TuningProposal,
 } from "./tuning.ts";
 import type { WorkflowNode } from "./types.ts";
+import { decideBackend, nodeAgentName, delegateV2 } from "./execution.ts";
 import type {
   ActiveModelCategory,
   CanonicalProfile,
@@ -1046,6 +1047,39 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   pi.registerCommand("fusion-proposals", {
     description: "List tuning proposals",
     handler: async (_args, ctx) => report(ctx, formatProposals(state.proposals)),
+  });
+  pi.registerCommand("fusion-delegate", {
+    description: "Decide and (in active mode) emit a V2 delegation for the current workflow node",
+    handler: async (_args, ctx) => {
+      if (!workflow || workflow.status !== "running") {
+        report(ctx, "fusion delegate: no running workflow", "warning");
+        return;
+      }
+      if (state.config.status !== "ready") { report(ctx, "fusion delegate: unconfigured", "warning"); return; }
+      const node = runningNode(workflow);
+      if (!node || !node.profile) { report(ctx, "fusion delegate: no running node", "warning"); return; }
+      const decision = decideBackend({ node, config: state.config.config, concurrency: 0 });
+      if (decision.backend !== "delegated") {
+        report(ctx, `fusion delegate: direct · ${decision.reason}`);
+        return;
+      }
+      if (state.config.config.mode !== "active") {
+        report(ctx, `fusion delegate: would delegate ${node.kind} -> ${nodeAgentName(node.kind)} (${decision.reason}) · active mode required to emit`);
+        return;
+      }
+      const result = await delegateV2({
+        pi, config: state.config.config, profile: node.profile, repo: workflow.repo,
+        nodeId: node.id, ownerRunId: `workflow-${workflow.id}`,
+        agent: nodeAgentName(node.kind),
+        task: `Perform the ${node.kind} stage of the approved Pi Fusion workflow in ${workflow.repo}.`,
+        context: "fresh",
+      });
+      if (result.ok) {
+        report(ctx, `fusion delegate: ${node.kind} -> ${nodeAgentName(node.kind)} ${result.status ?? "accepted"}${result.duplicate ? " (duplicate rejected)" : ""}`);
+      } else {
+        report(ctx, `fusion delegate: ${node.kind} failed · ${result.error ?? result.status ?? "unknown"}`, "warning");
+      }
+    },
   });
   pi.registerCommand("fusion-setup-status", {
     description: "Show setup readiness and probe results",

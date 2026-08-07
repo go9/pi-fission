@@ -1,6 +1,7 @@
 import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
+import { stat } from "node:fs/promises";
 import {
   createDefaultConfig,
   defaultConfigPath,
@@ -21,7 +22,7 @@ import {
   type RoutingStatus,
 } from "./presentation.ts";
 import { diagnoseSetup, isActiveReady, loadSetupState, probeAll, saveSetupState } from "./setup.ts";
-import { appendRoutingEntry, describeRouting, formatAgents, formatRoutingLog, readRoutingEntries, sessionSummaries, widgetRows, type RoutingLogEntry } from "./routing-log.ts";
+import { appendRoutingEntry, describeRouting, formatAgents, formatRoutingLog, readRoutingEntries, routingLogPath, sessionSummaries, widgetRows, type RoutingLogEntry } from "./routing-log.ts";
 import type {
   ActiveThinkingLevel,
   CanonicalProfile,
@@ -399,9 +400,20 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
   let widgetExpanded = false;
   let widgetTimer: NodeJS.Timeout | null = null;
   let widgetCtx: ExtensionContext | null = null;
+  /** Last observed routing-log stat so the polling loop skips re-parses while nothing changed. */
+  let lastLogStat: { size: number; mtimeMs: number } | null = null;
 
-  const refreshWidget = async (): Promise<void> => {
+  const refreshWidget = async (force = false): Promise<void> => {
     if (!widgetCtx || typeof widgetCtx.ui.setWidget !== "function") return;
+    if (!force) {
+      try {
+        const current = await stat(routingLogPath(configPath));
+        if (lastLogStat && current.size === lastLogStat.size && current.mtimeMs === lastLogStat.mtimeMs) return;
+        lastLogStat = { size: current.size, mtimeMs: current.mtimeMs };
+      } catch {
+        // Missing log: still render the empty state.
+      }
+    }
     const entries = await readRoutingEntries(configPath);
     const summaries = sessionSummaries(entries, Date.now());
     widgetCtx.ui.setWidget("pi-fission-agents", widgetRows(summaries, state.sessionId, widgetExpanded));
@@ -409,7 +421,7 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
 
   const toggleWidget = (ctx: ExtensionContext): Promise<void> => {
     widgetExpanded = !widgetExpanded;
-    const refreshed = refreshWidget();
+    const refreshed = refreshWidget(true);
     report(ctx, widgetExpanded ? "fission agents: expanded" : "fission agents: collapsed", "info");
     return refreshed;
   };
@@ -420,9 +432,9 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     updateFooter(state, ctx);
     if (ctx.mode === "tui" && typeof ctx.ui.setWidget === "function") {
       widgetCtx = ctx;
-      await refreshWidget();
+      await refreshWidget(true);
       if (!widgetTimer) {
-        widgetTimer = setInterval(() => { void refreshWidget(); }, 2000);
+        widgetTimer = setInterval(() => { void refreshWidget(); }, 5000);
         widgetTimer.unref();
       }
     }

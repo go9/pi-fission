@@ -336,6 +336,25 @@ describe("router-only Pi Fission extension", () => {
     }
   });
 
+  it("forces a widget re-render on toggle even when the routing log is unchanged", async () => {
+    const saved = await fixture();
+    const runtime = fakeApi();
+    const notifications: string[] = [];
+    const context = fakeContext(tmpdir(), notifications);
+    try {
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await emit(runtime, context, "session_start", {});
+      const before = notifications.filter((line) => line.startsWith("widget:pi-fission-agents:")).length;
+      // Toggle collapses and expands; each toggle must re-render the view regardless of log state.
+      await runtime.shortcuts.get("ctrl+alt+f")!.handler(context);
+      await runtime.shortcuts.get("ctrl+alt+f")!.handler(context);
+      const after = notifications.filter((line) => line.startsWith("widget:pi-fission-agents:")).length;
+      assert.equal(after, before + 2, "each toggle re-renders the widget");
+    } finally {
+      await saved.mock.close();
+    }
+  });
+
   it("expands the widget to per-agent rows after a routed prompt", async () => {
     const saved = await fixture();
     const runtime = fakeApi();

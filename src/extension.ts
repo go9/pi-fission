@@ -1,3 +1,4 @@
+import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/api/openai-completions";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defaultConfigPath, loadConfig, telemetryPath, type ConfigResult } from "./config.ts";
 import { classify, observeToolPhase } from "./classifier.ts";
@@ -104,12 +105,25 @@ function registerProvider(pi: ExtensionAPI, config: FusionConfig, discovery: Dis
       maxTokens: model.maxTokens ?? Math.min(16_384, capabilities?.contextWindow ?? 16_384),
     };
   });
+  const keylessLoopback = config.provider.apiKey === undefined;
   pi.registerProvider(config.provider.id, {
     name: "9Router (Pi Fusion)",
     baseUrl: config.provider.baseUrl,
     apiKey: config.provider.apiKey ?? "local",
-    authHeader: config.provider.apiKey !== undefined,
+    authHeader: !keylessLoopback,
     api: "openai-completions",
+    ...(keylessLoopback
+      ? {
+          streamSimple: (model, context, options) => streamOpenAICompletions(
+            model as Parameters<typeof streamOpenAICompletions>[0],
+            context,
+            {
+              ...options,
+              headers: { ...options?.headers, Authorization: null },
+            },
+          ),
+        }
+      : {}),
     models,
   });
 }

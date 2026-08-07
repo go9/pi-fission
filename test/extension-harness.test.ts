@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
+import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/api/openai-completions";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createFusionExtension } from "../src/extension.ts";
 import { listen, validConfig, writeConfig } from "../test-support/helpers.ts";
@@ -217,49 +218,69 @@ describe("Pi observer extension shadow mode", () => {
     }
   });
 
-  it("registers a keyless loopback provider with a local sentinel and no authorization header", async () => {
+  it("sends keyless and configured-key inference through the real OpenAI transport with the correct auth", async () => {
+    const inferenceAuthorization: Array<string | undefined> = [];
     const mock = await listen((request, response) => {
-      assert.equal(request.headers.authorization, undefined);
-      response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify({ data: [
-        { id: "pi-fast" }, { id: "pi-code" }, { id: "pi-reason" },
-        { id: "pi-review" }, { id: "pi-research" }, { id: "pi-vision" },
-      ] }));
+      if (request.url === "/v1/models") {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ data: [
+          { id: "pi-fast" }, { id: "pi-code" }, { id: "pi-reason" },
+          { id: "pi-review" }, { id: "pi-research" }, { id: "pi-vision" },
+        ] }));
+        return;
+      }
+      assert.equal(request.url, "/v1/chat/completions");
+      inferenceAuthorization.push(request.headers.authorization);
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write(`data: ${JSON.stringify({
+          id: "chatcmpl-test",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "pi-fast",
+          choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }],
+        })}\n\n`);
+        response.write(`data: ${JSON.stringify({
+          id: "chatcmpl-test",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "pi-fast",
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        })}\n\n`);
+        response.end("data: [DONE]\n\n");
+      });
     });
     const base = validConfig();
-    const config = validConfig({ provider: { ...base.provider, baseUrl: mock.baseUrl, apiKey: undefined } });
-    const { path: configPath } = await writeConfig(config);
-    const runtime = fakeApi();
+    const keylessConfig = validConfig({ provider: { ...base.provider, baseUrl: mock.baseUrl, apiKey: undefined } });
+    const keyedConfig = validConfig({ provider: { ...base.provider, baseUrl: mock.baseUrl } });
+    const keylessWritten = await writeConfig(keylessConfig);
+    const keyedWritten = await writeConfig(keyedConfig);
+    const keylessRuntime = fakeApi();
+    const keyedRuntime = fakeApi();
+    const context = { messages: [{ role: "user" as const, content: "test", timestamp: 1 }] };
     try {
-      await createFusionExtension(runtime.api, { configPath, env: {} });
-      assert.equal(runtime.providers.length, 1);
-      assert.equal(runtime.providers[0]?.provider.apiKey, "local");
-      assert.equal(runtime.providers[0]?.provider.authHeader, false);
-    } finally {
-      await mock.close();
-    }
-  });
-
-  it("registers a configured-key provider with authorization enabled", async () => {
-    const mock = await listen((request, response) => {
-      assert.equal(request.headers.authorization, "Bearer CREDENTIAL_SENTINEL");
-      response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify({ data: [
-        { id: "pi-fast" }, { id: "pi-code" }, { id: "pi-reason" },
-        { id: "pi-review" }, { id: "pi-research" }, { id: "pi-vision" },
-      ] }));
-    });
-    const config = validConfig({ provider: { ...validConfig().provider, baseUrl: mock.baseUrl } });
-    const { path: configPath } = await writeConfig(config);
-    const runtime = fakeApi();
-    try {
-      await createFusionExtension(runtime.api, {
-        configPath,
+      await createFusionExtension(keylessRuntime.api, { configPath: keylessWritten.path, env: {} });
+      await createFusionExtension(keyedRuntime.api, {
+        configPath: keyedWritten.path,
         env: { TEST_9ROUTER_KEY: "CREDENTIAL_SENTINEL" },
       });
-      assert.equal(runtime.providers.length, 1);
-      assert.equal(runtime.providers[0]?.provider.apiKey, "$TEST_9ROUTER_KEY");
-      assert.equal(runtime.providers[0]?.provider.authHeader, true);
+      const keyless = keylessRuntime.providers[0]?.provider;
+      const keyed = keyedRuntime.providers[0]?.provider;
+      assert.equal(keyless.apiKey, "local", "sentinel keeps Pi's model auth gate configured");
+      assert.equal(keyless.authHeader, false);
+      assert.equal(typeof keyless.streamSimple, "function");
+      assert.equal(keyed.apiKey, "$TEST_9ROUTER_KEY");
+      assert.equal(keyed.authHeader, true);
+      assert.equal(keyed.streamSimple, undefined, "configured keys retain Pi's native authenticated transport");
+
+      const keylessModel = { ...keyless.models[0], provider: "9router", api: keyless.api, baseUrl: keyless.baseUrl };
+      const keyedModel = { ...keyed.models[0], provider: "9router", api: keyed.api, baseUrl: keyed.baseUrl };
+      const keylessResult = await keyless.streamSimple(keylessModel, context, { apiKey: keyless.apiKey }).result();
+      const keyedResult = await streamOpenAICompletions(keyedModel, context, { apiKey: "CREDENTIAL_SENTINEL" }).result();
+      assert.equal(keylessResult.stopReason, "stop");
+      assert.equal(keyedResult.stopReason, "stop");
+      assert.deepEqual(inferenceAuthorization, [undefined, "Bearer CREDENTIAL_SENTINEL"]);
     } finally {
       await mock.close();
     }

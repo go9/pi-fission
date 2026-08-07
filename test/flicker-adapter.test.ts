@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
-import { findPlanningTicket, readFlickerTicketStatus, resolveFlickerProject, syncFlickerStatus, writeFlickerDocument } from "../src/flicker-adapter.ts";
+import { findPlanningTicket, readFlickerDocument, readFlickerTicketStatus, resolveFlickerProject, syncFlickerStatus, writeFlickerDocument } from "../src/flicker-adapter.ts";
 
 async function fakeFlicker(status = "backlog") {
   const dir = await mkdtemp(join(tmpdir(), "pi-fusion-flicker-"));
@@ -17,6 +17,8 @@ elif [ "$1 $2" = "ticket show" ]; then
   printf '%s\\n' '{"id":1501,"status":"${status}"}'
 elif [ "$1 $2" = "ticket list" ]; then
   printf '%s\\n' '[{"id":1501,"body_md":"Pi Fusion workflow: wf-1"}]'
+elif [ "$1 $2 $3" = "ticket document read" ]; then
+  printf '%s\\n' '[]'
 else
   printf '%s\\n' '{"ok":true}'
 fi
@@ -35,6 +37,7 @@ describe("Flicker adapter lifecycle", () => {
     const fake = await fakeFlicker();
     assert.deepEqual(await findPlanningTicket(fake.dir, "wf-1", { env: fake.env }), { ok: true, ticketId: "1501" });
     assert.deepEqual(await readFlickerTicketStatus("1501", { env: fake.env }), { ok: true, status: "backlog" });
+    assert.deepEqual(await readFlickerDocument("1501", "task_contract", { env: fake.env }), { ok: true, document: null });
   });
 
   it("selects and starts a backlog ticket but never completes it for local workflow completion", async () => {
@@ -57,5 +60,7 @@ describe("Flicker adapter lifecycle", () => {
     const fake = await fakeFlicker("in_progress");
     assert.deepEqual(await syncFlickerStatus("1501", "cancelled", { env: fake.env }), { ok: true });
     assert.match(await readFile(fake.log, "utf8"), /ticket defer 1501 --json/);
+    const done = await fakeFlicker("done");
+    assert.deepEqual(await syncFlickerStatus("1501", "cancelled", { env: done.env }), { ok: false, error: "Flicker ticket is already done; refusing local cancellation or automatic reopen" });
   });
 });

@@ -41,12 +41,14 @@ export async function findPlanningTicket(repo: string, workflowId: string, optio
   try {
     const { stdout } = await execFileAsync("flicker", ["ticket", "list", "--json"], { cwd: repo, env: options.env ?? process.env, maxBuffer: 20_000_000 });
     const parsed = JSON.parse(stdout);
-    const tickets = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tickets) ? parsed.tickets : [];
+    const tickets = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tickets) ? parsed.tickets : null;
+    if (!tickets) return { ok: false, ticketId: null, error: "Flicker ticket list response has an unexpected shape" };
     const marker = `Pi Fusion workflow: ${workflowId}`;
     const matches = tickets.filter((ticket: unknown) => typeof (ticket as { body_md?: unknown })?.body_md === "string" && (ticket as { body_md: string }).body_md.includes(marker));
     if (matches.length > 1) return { ok: false, ticketId: null, error: "Multiple Flicker tickets match the workflow marker" };
     const match = matches[0];
-    const id = typeof match?.id === "number" ? String(match.id) : typeof match?.id === "string" ? match.id : null;
+    const id = typeof match?.id === "number" ? String(match.id) : typeof match?.id === "string" && match.id.trim() ? match.id : null;
+    if (match && !id) return { ok: false, ticketId: null, error: "Matching Flicker ticket has an invalid id" };
     return { ok: true, ticketId: id };
   } catch (error) {
     return { ok: false, ticketId: null, error: (error as Error).message.slice(0, 200) };
@@ -62,6 +64,21 @@ export async function createPlanningTicket(repo: string, title: string, body: st
     return { ok: id !== null, ticketId: id };
   } catch (error) {
     return { ok: false, ticketId: null, error: (error as Error).message.slice(0, 200) };
+  }
+}
+
+export async function readFlickerDocument(ticketId: string, kind: string, options: { env?: NodeJS.ProcessEnv } = {}): Promise<{ ok: boolean; document: { body: string; version: number | null } | null; error?: string }> {
+  try {
+    const { stdout } = await execFileAsync("flicker", ["ticket", "document", "read", ticketId, kind, "--json"], { cwd: process.cwd(), env: options.env ?? process.env });
+    const parsed = JSON.parse(stdout);
+    const current = Array.isArray(parsed) ? parsed.find((item) => item?.current !== false) : parsed;
+    if (!current) return { ok: true, document: null };
+    const body = typeof current?.body_md === "string" ? current.body_md : typeof current?.body === "string" ? current.body : null;
+    if (body === null) return { ok: false, document: null, error: "Flicker document response did not contain a body" };
+    return { ok: true, document: { body, version: typeof current?.version === "number" ? current.version : null } };
+  } catch (error) {
+    const message = (error as Error).message.slice(0, 200);
+    return /not[_ -]?found|404/i.test(message) ? { ok: true, document: null } : { ok: false, document: null, error: message };
   }
 }
 
@@ -98,11 +115,11 @@ export async function syncFlickerStatus(ticketId: string, status: WorkflowState[
     const current = JSON.parse(stdout)?.status;
     if (typeof current !== "string") return { ok: false, error: "Flicker ticket response did not contain a status" };
 
+    if (current === "done") return { ok: false, error: "Flicker ticket is already done; refusing local cancellation or automatic reopen" };
     if (status === "cancelled") {
       if (current === "selected_for_dev" || current === "in_progress") await run("defer");
       return { ok: true };
     }
-    if (current === "done") return { ok: false, error: "Flicker ticket is already done; refusing automatic reopen" };
     if (current === "backlog") {
       await run("select-for-dev");
       await run("start");

@@ -203,7 +203,7 @@ describe("workflow planning and runtime", () => {
     await Promise.all([upsertWorkflow(a, storePath), upsertWorkflow(b, storePath)]);
     assert.equal((await loadWorkflows(storePath)).length, 2, "concurrent cross-repository upserts cannot lose data");
     assert.equal((await activeWorkflowForRepo(aliasA, "a", storePath))?.id, a.id, "symlink aliases resolve to the same repository owner");
-    const projecting = { ...a, status: "complete" as const, pendingProjection: { kind: "complete" as const, createdAt: "x" } };
+    const projecting = { ...a, status: "complete" as const, pendingProjection: { kind: "complete" as const, createdAt: "x", documentMarker: "m", documentWritten: false } };
     await upsertWorkflow(projecting, storePath);
     assert.equal((await activeWorkflowForRepo(aliasA, "a", storePath))?.pendingProjection?.kind, "complete", "terminal local state remains recoverable while a Flicker outbox item is pending");
 

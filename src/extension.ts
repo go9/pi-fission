@@ -37,7 +37,7 @@ import {
   type AggregateUsage,
 } from "./telemetry.ts";
 import { diagnoseSetup, isActiveReady, loadSetupState, probeAll, saveSetupState, type SetupDiagnostic } from "./setup.ts";
-import { resolveFlickerProject, createPlanningTicket, findPlanningTicket, readFlickerTicketStatus, syncFlickerStatus, writeFlickerDocument } from "./flicker-adapter.ts";
+import { resolveFlickerProject, createPlanningTicket, findPlanningTicket, readFlickerDocument, readFlickerTicketStatus, syncFlickerStatus, writeFlickerDocument } from "./flicker-adapter.ts";
 import {
   activeWorkflowForRepo,
   advanceWorkflow,
@@ -239,6 +239,7 @@ async function gitStatus(repo: string): Promise<string | null> {
 
 export async function commitChangedFiles(repo: string, previousHead: string | null, previousStatus: string | null): Promise<boolean> {
   try {
+    if (previousStatus !== "") return false;
     const current = await gitHead(repo);
     if (!current || !previousHead || current === previousHead) return false;
     const { stdout } = await execFileAsync("git", ["diff", "--name-only", `${previousHead}..${current}`], { cwd: repo });
@@ -732,7 +733,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       return {
         ...candidate,
         status: "blocked",
-        nodes: first ? candidate.nodes.map((node) => node.id === first.id ? { ...node, status: "failed" as const, error: found.error ?? "Flicker ticket lookup failed" } : node) : candidate.nodes,
+        nodes: first ? candidate.nodes.map((node) => node.id === first.id ? { ...node, status: "failed" as const, error: `Flicker ticket lookup failed: ${found.error ?? "unknown error"}` } : node) : candidate.nodes,
       };
     }
     const ticket = found.ticketId
@@ -748,7 +749,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         ...candidate,
         flickerTicketId: ticket.ticketId,
         status: candidate.envelope ? candidate.status : "awaiting-approval",
-        nodes: candidate.nodes.map((node) => node.status === "failed" && node.error?.includes("Flicker ticket creation")
+        nodes: candidate.nodes.map((node) => node.status === "failed" && node.error?.startsWith("Flicker ticket")
           ? { ...node, status: "pending" as const, finishedAt: null, error: undefined }
           : node),
         updatedAt: new Date().toISOString(),
@@ -765,6 +766,15 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     };
   };
 
+  const ensureFlickerDocument = async (ticketId: string, kind: string, title: string, marker: string, body: string): Promise<{ ok: boolean; error?: string }> => {
+    const current = await readFlickerDocument(ticketId, kind, { env: environment });
+    if (!current.ok) return { ok: false, error: current.error };
+    const tagged = `<!-- ${marker} -->`;
+    if (current.document?.body.includes(tagged)) return { ok: true };
+    if (current.document) return { ok: false, error: `Concurrent Flicker ${kind} head v${current.document.version ?? "unknown"}; refusing replacement` };
+    return writeFlickerDocument(ticketId, kind, title, `${tagged}\n${body}`, { env: environment });
+  };
+
   const projectPendingFlicker = async (candidate: WorkflowState): Promise<{ workflow: WorkflowState; ok: boolean; error?: string }> => {
     const pending = candidate.pendingProjection;
     if (!pending) return { workflow: candidate, ok: true };
@@ -776,15 +786,26 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     }
     let attached = await attachFlickerTicket(candidate);
     if (!attached.flickerTicketId) return { workflow: { ...attached, status: "blocked" }, ok: false, error: "Flicker ticket unavailable" };
+    const ticketId = attached.flickerTicketId;
+    let activePending = attached.pendingProjection ?? pending;
     let result: { ok: boolean; error?: string };
-    if (pending.kind === "approve") {
-      const written = await writeFlickerDocument(attached.flickerTicketId, "task_contract", "Pi Fusion task contract", flickerTaskContractBody(attached), { env: environment });
-      result = written.ok ? await syncFlickerStatus(attached.flickerTicketId, "running", { env: environment }) : written;
-    } else if (pending.kind === "complete") {
-      const written = await writeFlickerDocument(attached.flickerTicketId, "implementation_notes", "Pi Fusion implementation evidence", flickerImplementationNotesBody(attached), { env: environment });
-      result = written.ok ? await syncFlickerStatus(attached.flickerTicketId, "complete", { env: environment }) : written;
+    if ((activePending.kind === "approve" || activePending.kind === "complete") && !activePending.documentWritten) {
+      const marker = activePending.documentMarker ?? `pi-fusion:${attached.id}:${activePending.kind}:v${attached.envelope?.version ?? 0}`;
+      const kind = activePending.kind === "approve" ? "task_contract" : "implementation_notes";
+      const title = activePending.kind === "approve" ? "Pi Fusion task contract" : "Pi Fusion implementation evidence";
+      const body = activePending.kind === "approve" ? flickerTaskContractBody(attached) : flickerImplementationNotesBody({ ...attached, status: "complete" });
+      const written = await ensureFlickerDocument(ticketId, kind, title, marker, body);
+      if (!written.ok) return { workflow: { ...attached, status: "blocked" }, ok: false, error: written.error };
+      activePending = { ...activePending, documentMarker: marker, documentWritten: true };
+      attached = { ...attached, pendingProjection: activePending };
+      await upsertWorkflow(attached, storePath);
+    }
+    if (activePending.kind === "approve") {
+      result = await syncFlickerStatus(ticketId, "running", { env: environment });
+    } else if (activePending.kind === "complete") {
+      result = await syncFlickerStatus(ticketId, "complete", { env: environment });
     } else {
-      result = await syncFlickerStatus(attached.flickerTicketId, "cancelled", { env: environment });
+      result = await syncFlickerStatus(ticketId, "cancelled", { env: environment });
     }
     if (!result.ok) return { workflow: { ...attached, status: "blocked" }, ok: false, error: result.error };
     const status: WorkflowState["status"] = pending.kind === "approve" ? "running" : pending.kind === "complete" ? "complete" : "cancelled";
@@ -884,10 +905,15 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       workflow = await activeWorkflowForRepo(repo, ownerSession, storePath);
       state.foreignOwner = (await foreignOwnerForRepo(repo, ownerSession, storePath)) !== null;
       if (workflow?.adapter === "flicker") {
-        workflow = await attachFlickerTicket(workflow);
-        if (workflow.pendingProjection) {
+        if (workflow.pendingProjection?.kind === "cancel") {
           const projected = await projectPendingFlicker(workflow);
           workflow = projected.workflow;
+        } else {
+          workflow = await attachFlickerTicket(workflow);
+          if (workflow.pendingProjection) {
+            const projected = await projectPendingFlicker(workflow);
+            workflow = projected.workflow;
+          }
         }
         if (workflow.flickerTicketId && !workflow.pendingProjection) {
           const remote = await readFlickerTicketStatus(workflow.flickerTicketId, { env: environment });
@@ -1193,7 +1219,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         }
         let advanced = advanceWorkflow(workflow, node.id, settledOutcome === "error" ? "failed" : "passed", settledOutcome === "error" ? "provider/tool error" : undefined);
         if (advanced.status === "complete" && advanced.adapter === "flicker") {
-          advanced = { ...advanced, pendingProjection: { kind: "complete", createdAt: new Date().toISOString() } };
+          advanced = { ...advanced, pendingProjection: { kind: "complete", createdAt: new Date().toISOString(), documentMarker: `pi-fusion:${advanced.id}:complete:v${advanced.envelope?.version ?? 0}`, documentWritten: false } };
           workflow = advanced;
           state.workflow = workflow;
           await persistWorkflowState();
@@ -1347,7 +1373,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         budgetTokens: null,
       });
       workflow = approved.adapter === "flicker"
-        ? { ...approved, pendingProjection: { kind: "approve", createdAt: new Date().toISOString() } }
+        ? { ...approved, pendingProjection: { kind: "approve", createdAt: new Date().toISOString(), documentMarker: `pi-fusion:${approved.id}:approve:v${approved.envelope?.version ?? 0}`, documentWritten: false } }
         : approved;
       state.workflow = workflow;
       await persistWorkflowState();
@@ -1466,7 +1492,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     handler: async (_args, ctx) => {
       if (!workflow) { report(ctx, "fusion cancel: no active workflow", "warning"); return; }
       let cancelled = cancelWorkflow(workflow);
-      if (cancelled.adapter === "flicker") cancelled = { ...cancelled, pendingProjection: { kind: "cancel", createdAt: new Date().toISOString() } };
+      if (cancelled.adapter === "flicker") cancelled = { ...cancelled, pendingProjection: { kind: "cancel", createdAt: new Date().toISOString(), documentMarker: null, documentWritten: true } };
       workflow = cancelled;
       state.workflow = workflow;
       await persistWorkflowState();

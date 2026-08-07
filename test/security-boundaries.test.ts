@@ -35,6 +35,18 @@ describe("commit evidence integrity", () => {
     assert.equal(await commitChangedFiles(repo, before, status), false, "later writes invalidate prior commit evidence");
   });
 
+  it("rejects a dirty baseline even when porcelain status text later looks identical", async () => {
+    const repo = await repository();
+    const before = git(repo, ["rev-parse", "HEAD"]).trim();
+    await writeFile(join(repo, "file.txt"), "dirty before node\n");
+    const dirty = git(repo, ["status", "--porcelain=v1", "--untracked-files=all"]);
+    git(repo, ["add", "file.txt"]);
+    git(repo, ["commit", "-qm", "commit dirty baseline"]);
+    await writeFile(join(repo, "file.txt"), "dirty after commit\n");
+    assert.equal(git(repo, ["status", "--porcelain=v1", "--untracked-files=all"]), dirty);
+    assert.equal(await commitChangedFiles(repo, before, dirty), false);
+  });
+
   it("rejects an empty amend that only changes the commit identity", async () => {
     const repo = await repository();
     const before = git(repo, ["rev-parse", "HEAD"]).trim();

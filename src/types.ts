@@ -182,6 +182,8 @@ export type WorkflowStatus = "planning" | "awaiting-approval" | "running" | "pau
 export interface PendingFlickerProjection {
   kind: "approve" | "complete" | "cancel";
   createdAt: string;
+  documentMarker: string | null;
+  documentWritten: boolean;
 }
 
 export interface WorkflowState {

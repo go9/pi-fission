@@ -484,7 +484,12 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     if (internal) {
       expectedInternalSelection = null;
     } else if (restorationInProgress) {
-      userSelectionDuringRestore = event.model;
+      if (restoreModel && selected.provider === restoreModel.provider && selected.id === restoreModel.id) {
+        // The restore's own model event arriving late: internal, never a user selection.
+        setActiveModel(selected);
+      } else {
+        userSelectionDuringRestore = event.model;
+      }
     } else if (lastRestoreModel
       && selected.provider === lastRestoreModel.provider
       && selected.id === lastRestoreModel.id

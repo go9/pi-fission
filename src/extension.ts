@@ -476,7 +476,10 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       expectedInternalSelection = null;
     } else if (restorationInProgress) {
       userSelectionDuringRestore = event.model;
-    } else if (promptSeen) {
+    } else if (event.source === "restore") {
+      // Pi re-applying a model (our own restore or a session restore): never a user override.
+      setActiveModel(selected);
+    } else if (event.source === "cycle" || promptSeen) {
       manualOverride = true;
       routeActive = false;
       routeChangedModel = false;

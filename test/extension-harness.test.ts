@@ -272,6 +272,24 @@ describe("router-only Pi Fusion extension", () => {
     }
   });
 
+  it("ignores restore-source model events so routing continues", async () => {
+    const saved = await fixture();
+    const runtime = fakeApi();
+    const target = { provider: "9router", id: saved.config.profiles.code.modelId };
+    const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target]);
+    try {
+      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
+      assert.equal(runtime.selectionCalls.length, 1);
+      // Pi re-applies the restored model after the turn settles; this must not pause routing.
+      await emit(runtime, context, "model_select", { model: { provider: "existing", id: "original" }, previousModel: target, source: "restore" });
+      await emit(runtime, context, "before_agent_start", { prompt: "Implement another helper", images: [] });
+      assert.equal(runtime.selectionCalls.length, 2, "restore-source event must not be treated as a manual override");
+    } finally {
+      await saved.mock.close();
+    }
+  });
+
   it("parses mode arguments without exposing workflow state", async () => {
     const saved = await fixture();
     const runtime = fakeApi();

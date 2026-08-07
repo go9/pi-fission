@@ -52,6 +52,27 @@ fusion: active · plan → design · fusion-design
 
 Low-confidence, unavailable, manually overridden, setup-blocked, and restoration-failure states are shown explicitly. Fusion never intercepts tools or creates an approval workflow.
 
+## See what models are in use (main agent and subagents)
+
+```text
+/fusion-routing
+```
+
+Every session (the main agent and each subagent, which is its own Pi session) appends a content-free entry for each routing decision. The command groups them by session and shows, for each agent/subagent, the current model and why it switched:
+
+```text
+fusion routing:
+  session 3f1a…
+    now: fusion-sidekick (code)
+    switched to fusion-sidekick because writing code · 92%
+    switched to fusion-explore because exploring the codebase · 87%
+  session 8b2c…
+    now: fusion-reviewer (review)
+    switched to fusion-reviewer because reviewing the work · 90%
+```
+
+The raw log lives at `~/.pi/agent/extensions/pi-fusion.routing.jsonl`. Entries contain only session id, working directory, phase, profile, model transitions, and reason codes — never prompts, code, or tool output.
+
 ## Diagnostics
 
 ```text
@@ -60,6 +81,7 @@ Low-confidence, unavailable, manually overridden, setup-blocked, and restoration
 /fusion-explain
 /fusion-config
 /fusion-setup-status
+/fusion-routing
 /fusion-mode active|shadow|off
 ```
 

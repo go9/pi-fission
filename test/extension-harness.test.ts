@@ -99,7 +99,7 @@ describe("router-only Pi Fusion extension", () => {
     try {
       await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       assert.deepEqual([...runtime.commands.keys()].sort(), [
-        "fusion", "fusion-config", "fusion-explain", "fusion-mode", "fusion-setup", "fusion-setup-status", "fusion-status",
+        "fusion", "fusion-config", "fusion-explain", "fusion-mode", "fusion-routing", "fusion-setup", "fusion-setup-status", "fusion-status",
       ]);
       assert.equal(runtime.handlers.has("tool_call"), false, "Fusion never intercepts tools");
       assert.equal(runtime.handlers.has("tool_result"), false);
@@ -248,6 +248,27 @@ describe("router-only Pi Fusion extension", () => {
       assert.ok(notifications.some((line) => line.includes("7/7 profiles passed")));
     } finally {
       await mock.close();
+    }
+  });
+
+  it("records a content-free routing entry with the switch reason", async () => {
+    const saved = await fixture();
+    const runtime = fakeApi();
+    const target = { provider: "9router", id: saved.config.profiles.code.modelId };
+    const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target]);
+    try {
+      await createFusionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await emit(runtime, context, "before_agent_start", { prompt: "Implement a TypeScript helper", images: [] });
+      const entries = JSON.parse(await readFile(join(saved.dir, "pi-fusion.routing.jsonl"), "utf8"));
+      assert.equal(entries.kind, "route");
+      assert.equal(entries.profile, "code");
+      assert.equal(entries.toModel, saved.config.profiles.code.modelId);
+      assert.equal(entries.switched, true);
+      assert.equal(entries.reason, "writing code");
+      assert.ok(entries.sessionId.length > 0);
+      assert.doesNotMatch(JSON.stringify(entries), /Implement a TypeScript helper/);
+    } finally {
+      await saved.mock.close();
     }
   });
 

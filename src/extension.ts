@@ -20,6 +20,7 @@ import {
   type RoutingStatus,
 } from "./presentation.ts";
 import { diagnoseSetup, isActiveReady, loadSetupState, probeAll, saveSetupState } from "./setup.ts";
+import { appendRoutingEntry, describeRouting, readRoutingEntries, formatRoutingLog, type RoutingLogEntry } from "./routing-log.ts";
 import type {
   ActiveThinkingLevel,
   CanonicalProfile,
@@ -51,6 +52,7 @@ interface RuntimeState {
   setup: SetupState | null;
   routingStatus: RoutingStatus;
   routingReason: string | null;
+  sessionId: string;
 }
 
 type ActivePiModel = NonNullable<ExtensionContext["model"]>;
@@ -182,6 +184,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     setup,
     routingStatus: "idle",
     routingReason: null,
+    sessionId: "unknown",
   };
 
   let restoreModel: ActivePiModel | null = null;
@@ -339,7 +342,45 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
 
   const report = (ctx: ExtensionContext, message: string, level: "info" | "warning" = "info"): void => show(ctx, message, level, stderr);
 
+  const getSessionId = (ctx: ExtensionContext): string => {
+    try {
+      const id = ctx.sessionManager?.getSessionId?.();
+      if (id) return id;
+    } catch {
+      // fall through
+    }
+    return `pid:${process.pid}`;
+  };
+
+  const recordRouting = async (ctx: ExtensionContext, previousModel: ModelIdentity | null): Promise<void> => {
+    if (state.config.status !== "ready" || state.config.config.mode !== "active") return;
+    const kind: RoutingLogEntry["kind"] =
+      state.routingStatus === "routed" ? "route"
+      : state.routingStatus === "manual" ? "manual"
+      : state.routingStatus === "restore-failed" ? "restore-failed"
+      : "retained";
+    const toModel = state.recommendation?.modelId ?? null;
+    const fromModel = previousModel ? `${previousModel.provider}/${previousModel.id}` : state.activeModel;
+    const entry: RoutingLogEntry = {
+      version: 1,
+      ts: new Date().toISOString(),
+      sessionId: state.sessionId,
+      cwd: ctx.cwd,
+      kind,
+      phase: state.classification?.phase ?? "unknown",
+      profile: state.recommendation?.profile ?? null,
+      fromModel,
+      toModel,
+      switched: kind === "route" && toModel !== null && fromModel !== toModel,
+      reason: describeRouting(kind, state.classification?.phase ?? "unknown", state.recommendation?.reasonCodes ?? []),
+      reasonCodes: state.recommendation?.reasonCodes ?? [],
+      confidence: state.recommendation?.confidence ?? null,
+    };
+    await appendRoutingEntry(configPath, entry);
+  };
+
   pi.on("session_start", async (_event, ctx) => {
+    state.sessionId = getSessionId(ctx);
     setActiveModel(modelIdentity(ctx));
     updateFooter(state, ctx);
   });
@@ -351,31 +392,36 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
 
   pi.on("before_agent_start", async (event, ctx) => {
     promptSeen = true;
-    setActiveModel(modelIdentity(ctx));
+    const previousModel = modelIdentity(ctx);
+    setActiveModel(previousModel);
     state.classification = classify({ text: event.prompt, imageCount: event.images?.length ?? 0 });
     state.routingReason = null;
     reroute();
 
     if (state.config.status !== "ready" || state.config.config.mode !== "active") {
       state.routingStatus = "idle";
+      await recordRouting(ctx, previousModel);
       updateFooter(state, ctx);
       return;
     }
     if (!state.setup || !isActiveReady(state.config.config, state.setup)) {
       state.routingStatus = "setup-blocked";
       state.routingReason = "run /fusion-setup";
+      await recordRouting(ctx, previousModel);
       updateFooter(state, ctx);
       return;
     }
     if (manualOverride) {
       state.routingStatus = "manual";
       state.routingReason = "manual model selection takes precedence; run /fusion-mode active to resume automatic routing";
+      await recordRouting(ctx, previousModel);
       updateFooter(state, ctx);
       return;
     }
     if (!state.recommendation?.profile || !state.recommendation.modelId || state.discovery?.status !== "ready") {
       state.routingStatus = "retained";
       state.routingReason = state.recommendation?.reasonCodes.join(", ") || state.discovery?.diagnostic || "no eligible route";
+      await recordRouting(ctx, previousModel);
       updateFooter(state, ctx);
       return;
     }
@@ -384,6 +430,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     if (!target || !previous) {
       state.routingStatus = "retained";
       state.routingReason = !target ? "recommended 9Router group is unavailable" : "current Pi model is unavailable";
+      await recordRouting(ctx, previousModel);
       updateFooter(state, ctx);
       return;
     }
@@ -395,6 +442,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     state.routingStatus = "routed";
     if (!routeChangedModel) {
       setActiveModel({ provider: target.provider, id: target.id });
+      await recordRouting(ctx, previousModel);
       updateFooter(state, ctx);
       return;
     }
@@ -415,6 +463,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     } else {
       setActiveModel({ provider: target.provider, id: target.id });
     }
+    await recordRouting(ctx, previousModel);
     updateFooter(state, ctx);
   });
 
@@ -482,6 +531,10 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   pi.registerCommand("fusion-explain", {
     description: "Explain the latest automatic route",
     handler: async (_args, ctx) => report(ctx, formatExplain(asView(state))),
+  });
+  pi.registerCommand("fusion-routing", {
+    description: "Show current models and why each session switched (main agent and subagents)",
+    handler: async (_args, ctx) => report(ctx, formatRoutingLog(await readRoutingEntries(configPath))),
   });
   pi.registerCommand("fusion-setup-status", {
     description: "Show seven-profile setup and probe status",

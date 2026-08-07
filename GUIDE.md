@@ -49,6 +49,15 @@ Setup re-runs all seven probes and returns to active mode only if every profile 
 /fusion-explain
 /fusion-config
 /fusion-setup-status
+/fusion-routing
+```
+
+`/fusion-routing` shows, per session (main agent and each subagent), the current model and why it was selected:
+
+```text
+switched to fusion-sidekick because writing code
+switched to fusion-explore because exploring the codebase
+switched to fusion-reviewer because reviewing the work
 ```
 
 If the footer says:

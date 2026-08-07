@@ -150,9 +150,11 @@ describe("Pi observer extension shadow mode", () => {
       const expectedCommands = [
         "fusion-cancel", "fusion-config", "fusion-delegate", "fusion-explain", "fusion-history",
         "fusion-mode", "fusion-pause", "fusion-plan", "fusion-proposals", "fusion-resume",
-        "fusion-route-once", "fusion-setup", "fusion-setup-status", "fusion-status",
-        "fusion-tune-approve", "fusion-tune-deny", "fusion-tune-propose", "fusion-tune-rollback",
-        "fusion-workflow",
+        "fusion", "fusion-cancel", "fusion-config", "fusion-dashboard-close", "fusion-delegate",
+        "fusion-explain", "fusion-history", "fusion-mode", "fusion-pause", "fusion-plan",
+        "fusion-proposals", "fusion-resume", "fusion-route-once", "fusion-setup",
+        "fusion-setup-status", "fusion-status", "fusion-tune-approve", "fusion-tune-deny",
+        "fusion-tune-propose", "fusion-tune-rollback", "fusion-workflow",
       ].sort();
       assert.deepEqual([...runtime.commands.keys()].sort(), expectedCommands);
       for (const event of ["agent_settled", "before_agent_start", "tool_result", "turn_end", "model_select", "thinking_level_select", "after_provider_response", "session_start", "session_shutdown"]) {

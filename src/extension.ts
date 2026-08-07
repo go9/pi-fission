@@ -1081,6 +1081,38 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       }
     },
   });
+  pi.registerCommand("fusion", {
+    description: "Open the Pi Fusion dashboard (mode, setup, workflow, proposals, controls)",
+    handler: async (_args, ctx) => {
+      if (ctx.mode !== "tui") {
+        // Non-TUI fallback: a compact text dashboard via notify/stderr.
+        report(ctx, [
+          formatStatus(asView(state)),
+          formatSetup(asView(state)),
+          formatWorkflow(state.workflow),
+          formatProposals(state.proposals),
+        ].join("\n"));
+        return;
+      }
+      const lines = [
+        `Pi Fusion dashboard`,
+        `mode: ${state.mode}`,
+        `setup: ${state.setup?.complete ? "complete" : "incomplete"}`,
+        `active model: ${state.activeModel ?? "unknown"}`,
+        formatWorkflow(state.workflow),
+        `proposals: ${state.proposals.length}`,
+      ];
+      ctx.ui.setWidget("pi-fusion-dashboard", lines);
+      ctx.ui.notify("fusion dashboard shown (esc to clear: /fusion-dashboard-close)", "info");
+    },
+  });
+  pi.registerCommand("fusion-dashboard-close", {
+    description: "Clear the Pi Fusion dashboard widget",
+    handler: async (_args, ctx) => {
+      if (ctx.mode === "tui") ctx.ui.setWidget("pi-fusion-dashboard", undefined);
+      report(ctx, "fusion dashboard: cleared");
+    },
+  });
   pi.registerCommand("fusion-setup-status", {
     description: "Show setup readiness and probe results",
     handler: async (_args, ctx) => report(ctx, formatSetup(asView(state))),

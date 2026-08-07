@@ -19,6 +19,7 @@ import {
   reopenWorkflowAt,
   saveWorkflows,
   upsertWorkflow,
+  withRepoWorkflowLock,
 } from "../src/workflow.ts";
 import { recordOutcome, buildTuningProposal, loadProposals, saveProposal, applyProposal, rollbackProposal, loadOutcomes } from "../src/tuning.ts";
 import type { CanonicalProfile, OutcomeRecord } from "../src/types.ts";
@@ -95,12 +96,12 @@ describe("workflow planning and runtime", () => {
     assert.equal(implement.kind, "implement");
     workflow = advanceWorkflow(workflow, implement.id, "passed");
     assert.equal(workflow.status, "blocked");
-    assert.equal(workflow.nodes.find((node) => node.id === implement.id)?.error, "missing in-worktree mutation or local commit evidence");
+    assert.equal(workflow.nodes.find((node) => node.id === implement.id)?.error, "missing in-worktree mutation or changed-files commit evidence");
 
     workflow = retryBlockedWorkflow(workflow, 3);
     workflow = {
       ...workflow,
-      nodes: workflow.nodes.map((node) => node.id === implement.id ? { ...node, evidence: ["mutation:write:in-worktree", "git:commit:ok"] } : node),
+      nodes: workflow.nodes.map((node) => node.id === implement.id ? { ...node, evidence: ["mutation:write:in-worktree", "git:commit:changed-files"] } : node),
     };
     workflow = advanceWorkflow(workflow, implement.id, "passed");
     assert.equal(workflow.nodes.find((node) => node.id === implement.id)?.status, "passed");
@@ -125,7 +126,7 @@ describe("workflow planning and runtime", () => {
     workflow = advanceWorkflow(workflow, workflow.nodes.find((node) => node.status === "running")!.id, "passed");
     workflow = advanceWorkflow(workflow, workflow.nodes.find((node) => node.status === "running")!.id, "passed");
     const implement = workflow.nodes.find((node) => node.status === "running")!;
-    workflow = { ...workflow, nodes: workflow.nodes.map((node) => node.id === implement.id ? { ...node, evidence: ["mutation:write:in-worktree", "git:commit:ok"] } : node) };
+    workflow = { ...workflow, nodes: workflow.nodes.map((node) => node.id === implement.id ? { ...node, evidence: ["mutation:write:in-worktree", "git:commit:changed-files"] } : node) };
     workflow = advanceWorkflow(workflow, implement.id, "passed");
     const review = workflow.nodes.find((node) => node.status === "running")!;
     workflow = advanceWorkflow(workflow, review.id, "failed", "missing file");
@@ -157,6 +158,7 @@ describe("workflow planning and runtime", () => {
     assert.deepEqual(workflow.nodes.find((node) => node.id === first.id)?.evidence, []);
     workflow = advanceWorkflow(workflow, first.id, "failed", "still failing");
     assert.equal(retryBlockedWorkflow(workflow, 1), workflow, "exhausted retry returns the unchanged blocked workflow");
+    assert.equal(reopenWorkflowAt(workflow, first.kind, 1), workflow, "retry and reopen share one monotonic attempt budget");
   });
 
   it("pause, resume, and cancel transitions are idempotent and reversible", () => {
@@ -176,6 +178,20 @@ describe("workflow planning and runtime", () => {
     workflow = cancelWorkflow(workflow);
     assert.equal(workflow.status, "cancelled");
     assert.ok(workflow.nodes.every((node) => node.status !== "running"));
+  });
+
+  it("serializes cross-process-style repository ownership checks", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-fusion-lock-"));
+    const storePath = join(dir, "workflows.json");
+    let active = 0;
+    let maxActive = 0;
+    await Promise.all(Array.from({ length: 4 }, () => withRepoWorkflowLock("/repo", storePath, async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+    })));
+    assert.equal(maxActive, 1);
   });
 
   it("session store persists workflows and warns on foreign ownership", async () => {

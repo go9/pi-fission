@@ -189,12 +189,12 @@ The extension never edits your repos or Flicker state without the workflow/plan 
 ```bash
 cd ~/Sites/pi-fusion-active-once
 PATH="$HOME/.local/share/mise/installs/node/24.6.0/bin:$PATH" npm run typecheck
-PATH="$HOME/.local/share/mise/installs/node/24.6.0/bin:$PATH" npm test            # 84 tests
+PATH="$HOME/.local/share/mise/installs/node/24.6.0/bin:$PATH" npm test            # 85 tests
 PATH="$HOME/.local/share/mise/installs/node/24.6.0/bin:$PATH" npm run test:integration  # 29 tests
 ```
 
 ## Current limitations (honest)
 
-1. **Live Flicker E2E** and **live pi-subagents child execution** are wired and regression-tested but not yet proven through their complete real acceptance protocols.
-2. The full isolated install → migration → upgrade → rollback → uninstall protocol is still release evidence in progress.
-3. Parent ticket #1485 remains open; the product is not declared complete until its acceptance matrix passes.
+1. Real non-Flicker and Flicker workflows have exercised plan approval, local commit, review, regression, bounded recovery, and no-remote ticket behavior; **live pi-subagents child acceptance** remains unproven.
+2. The full isolated install → migration → upgrade → rollback → uninstall protocol remains release evidence in progress.
+3. Crash-transactional reconciliation between local workflow persistence and Flicker document/ticket writes remains a blocker. Parent #1485 stays open until the full acceptance matrix passes.

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
@@ -874,12 +874,17 @@ describe("active workflow advancement on settlement", () => {
         "git push origin HEAD", "git -C . push origin HEAD", "gh --repo x/y pr merge 1",
         "flicker --environment main deploy", "terraform -chdir=infra destroy",
         "rm --recursive --force target", "eval git push", "python3 -c 'import os'",
+        "PATH=./bin git status", "GIT_EXTERNAL_DIFF=./helper git diff --ext-diff", "npm install --prefix ../outside",
       ]) {
         const remote = await emitResults(runtime.handlers, context, "tool_call", { toolName: "bash", toolCallId: command, input: { command } });
         assert.match(String((remote[0] as any).reason), /outside the approved local command allowlist/);
       }
       const outside = await emitResults(runtime.handlers, context, "tool_call", { toolName: "write", toolCallId: "outside", input: { path: "../outside", content: "x" } });
       assert.match(String((outside[0] as any).reason), /outside the approved worktree/);
+      const outsideDir = await mkdtemp(join(tmpdir(), "pi-fusion-outside-"));
+      await symlink(outsideDir, join(projectDir, "escape"));
+      const symlinkEscape = await emitResults(runtime.handlers, context, "tool_call", { toolName: "write", toolCallId: "symlink", input: { path: "escape/pwned", content: "x" } });
+      assert.match(String((symlinkEscape[0] as any).reason), /outside the approved worktree/);
       const child = await emitResults(runtime.handlers, context, "tool_call", { toolName: "subagent", toolCallId: "s", input: {} });
       assert.match(String((child[0] as any).reason), /outside the approved writer tool set/);
     } finally {

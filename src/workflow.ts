@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   ApprovalEnvelope,
   CanonicalProfile,
@@ -136,12 +136,12 @@ export function advanceWorkflow(workflow: WorkflowState, nodeId: string, status:
   let resolvedError = error;
   if (status === "passed" && node.kind === "implement" && (
     !node.evidence.some((item) => /^mutation:(?:write|edit):in-worktree$/.test(item))
-    || !node.evidence.includes("git:commit:ok")
+    || !node.evidence.includes("git:commit:changed-files")
   )) {
     resolvedStatus = "failed";
-    resolvedError = "missing in-worktree mutation or local commit evidence";
+    resolvedError = "missing in-worktree mutation or changed-files commit evidence";
   }
-  if (status === "passed" && node.kind === "regression" && !node.evidence.includes("verification:bash:ok")) {
+  if (status === "passed" && node.kind === "regression" && !node.evidence.includes("verification:test-command:ok")) {
     resolvedStatus = "failed";
     resolvedError = "missing regression evidence";
   }
@@ -194,7 +194,7 @@ export function retryBlockedWorkflow(workflow: WorkflowState, maxRetries: number
   if (workflow.status !== "blocked") return workflow;
   const failed = workflow.nodes.find((node) => node.status === "failed" || node.status === "blocked");
   if (!failed) return workflow;
-  const attempts = failed.retryCount ?? 0;
+  const attempts = (failed.retryCount ?? 0) + (failed.reopenCount ?? 0);
   if (attempts >= Math.max(0, maxRetries)) return workflow;
   const timestamp = (now ?? (() => new Date()))().toISOString();
   return {
@@ -208,7 +208,7 @@ export function retryBlockedWorkflow(workflow: WorkflowState, maxRetries: number
           startedAt: timestamp,
           finishedAt: null,
           error: undefined,
-          retryCount: attempts + 1,
+          retryCount: (node.retryCount ?? 0) + 1,
           evidence: [],
         }
       : node),
@@ -222,7 +222,7 @@ export function reopenWorkflowAt(workflow: WorkflowState, kind: WorkflowNodeKind
   const index = workflow.nodes.findIndex((node) => node.kind === kind);
   if (failedIndex < 0 || index < 0 || index > failedIndex) return workflow;
   const target = workflow.nodes[index]!;
-  const attempts = target.reopenCount ?? 0;
+  const attempts = (target.retryCount ?? 0) + (target.reopenCount ?? 0);
   if (attempts >= Math.max(0, maxRetries)) return workflow;
   const timestamp = (now ?? (() => new Date()))().toISOString();
   return {
@@ -238,7 +238,7 @@ export function reopenWorkflowAt(workflow: WorkflowState, kind: WorkflowNodeKind
           startedAt: timestamp,
           finishedAt: null,
           error: undefined,
-          reopenCount: attempts + 1,
+          reopenCount: (node.reopenCount ?? 0) + 1,
           evidence: [],
         };
       }
@@ -256,6 +256,29 @@ export function reopenWorkflowAt(workflow: WorkflowState, kind: WorkflowNodeKind
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Serialize repository ownership checks and workflow creation across Pi processes. */
+export async function withRepoWorkflowLock<T>(repo: string, path: string, operation: () => Promise<T>): Promise<T> {
+  const parent = join(dirname(path), ".pi-fusion-locks");
+  const lock = join(parent, createHash("sha256").update(repo).digest("hex").slice(0, 24));
+  await mkdir(parent, { recursive: true });
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    try {
+      await mkdir(lock);
+      try { return await operation(); } finally { await rm(lock, { recursive: true, force: true }); }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      try {
+        const ageMs = Date.now() - (await stat(lock)).mtimeMs;
+        if (ageMs > 120_000) { await rm(lock, { recursive: true, force: true }); continue; }
+      } catch {
+        continue;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  throw new Error("Pi Fusion repository workflow lock timed out");
 }
 
 /** Session adapter: workflow truth persists under the Pi agent data directory, keyed by repo. */

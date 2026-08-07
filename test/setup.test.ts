@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { parseConfig, defaultSetupStatePath } from "../src/config.ts";
+import { parseConfig, defaultSetupStatePath, effectiveProfileTarget } from "../src/config.ts";
 import { diagnoseSetup, isActiveReady, probeAll, runProbe, loadSetupState, saveSetupState } from "../src/setup.ts";
 import { validConfig } from "../test-support/helpers.ts";
 
@@ -42,6 +42,19 @@ describe("full-product config", () => {
     assert.ok(result.config?.profiles.fast);
     assert.ok(result.config?.profiles.design, "design profile is added by migration");
     assert.equal(Object.keys(result.config!.profiles).length, 7);
+  });
+
+  it("applies project overrides only to their matching repository", () => {
+    const config = validConfig({
+      projectOverrides: [
+        { repo: "/repo-a", profiles: { fast: "override-model-a" } },
+        { repo: "/repo-b", profiles: { fast: "override-model-b" } },
+      ],
+    });
+    assert.equal(effectiveProfileTarget(config, "fast", "/repo-a"), "override-model-a");
+    assert.equal(effectiveProfileTarget(config, "fast", "/repo-b"), "override-model-b");
+    assert.equal(effectiveProfileTarget(config, "fast", "/repo-c"), "fusion-explore", "unmatched repo uses the global target");
+    assert.equal(effectiveProfileTarget(config, "fast"), "fusion-explore", "no repo uses the global target");
   });
 
   it("rejects an active mode config with missing profiles", () => {
@@ -114,6 +127,17 @@ describe("setup diagnostics and probes", () => {
     // Unprobed state also blocks.
     assert.equal(isActiveReady({ ...config, mode: "active" }, { version: 1, complete: false, lastProbedAt: null, probes: {} }), false);
     assert.equal(isActiveReady({ ...config, mode: "shadow" }, { version: 1, complete: false, lastProbedAt: null, probes: {} }), false, "shadow is not active-ready");
+  });
+
+  it("active readiness requires probe targets to match the current config targets", async () => {
+    const config = validConfig({ provider: { ...validConfig().provider, baseUrl: "http://127.0.0.1:20128/v1", apiKey: undefined } });
+    const okFetch = async (): Promise<Response> => new Response(chatCompletion("OK"), { status: 200, headers: { "content-type": "application/json" } });
+    const { probes, complete } = await probeAll(config, { fetch: okFetch as unknown as typeof fetch, env: {} });
+    assert.equal(complete, true);
+    assert.equal(isActiveReady({ ...config, mode: "active" }, { version: 1, complete, lastProbedAt: null, probes }), true);
+    // Changing a profile target after a complete setup invalidates readiness until re-probed.
+    const staleTarget = { ...config, profiles: { ...config.profiles, fast: { ...config.profiles.fast, modelId: "fusion-new-target" } } };
+    assert.equal(isActiveReady({ ...staleTarget, mode: "active" }, { version: 1, complete, lastProbedAt: null, probes }), false);
   });
 
   it("persists setup state and rejects an active mode without a complete setup file", async () => {

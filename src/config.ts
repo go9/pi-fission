@@ -310,10 +310,13 @@ export function telemetryPath(configPath: string, config: FusionConfig): string 
   return join(dirname(configPath), config.telemetry.file);
 }
 
-/** Effective profile target for a repository, applying project overrides. */
+/** Effective profile target for a repository, applying project overrides.
+ *  Only an override whose repo matches the given path applies; otherwise the
+ *  global target is returned. */
 export function effectiveProfileTarget(config: FusionConfig, profile: CanonicalProfile, repo?: string): string {
   if (repo) {
     for (const override of config.projectOverrides) {
+      if (override.repo !== repo) continue;
       const target = override.profiles[profile];
       if (target) return target;
     }

@@ -566,6 +566,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         return;
       }
     } else {
+      workflow = null;
       state.workflow = null;
       state.foreignOwner = false;
     }
@@ -788,9 +789,15 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         report(ctx, "fusion mode: must be off, shadow, or active", "warning");
         return;
       }
-      if (requested === "active" && !isActiveReady(state.config.config, setup ?? { version: 1, complete: false, lastProbedAt: null, probes: {} })) {
-        report(ctx, "fusion mode: active blocked · setup incomplete · run /fusion-setup", "warning");
-        return;
+      if (requested === "active") {
+        const setupReady = isActiveReady(
+          { ...state.config.config, mode: "active" },
+          setup ?? { version: 1, complete: false, lastProbedAt: null, probes: {} },
+        );
+        if (!setupReady) {
+          report(ctx, "fusion mode: active blocked · setup incomplete · run /fusion-setup", "warning");
+          return;
+        }
       }
       const updated = { ...state.config.config, mode: requested as FusionConfig["mode"] };
       await saveConfig(state.config.path, updated);
@@ -921,8 +928,10 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     handler: async (args, ctx) => {
       const id = firstArg(args);
       const proposals = await loadProposals(configPath);
-      const proposal = proposals.find((item) => item.id.startsWith(id ?? "") && item.status === "proposed");
-      if (!proposal) { report(ctx, "fusion tune: no proposed proposal matches", "warning"); return; }
+      const proposal = id
+        ? proposals.find((item) => item.id.startsWith(id) && item.status === "proposed")
+        : undefined;
+      if (!proposal) { report(ctx, "fusion tune: no proposed proposal matches (pass an id)", "warning"); return; }
       const applied = await applyProposal(proposal, configPath);
       state.proposals = await loadProposals(configPath);
       report(ctx, `fusion tune: approved · applied to future workflows · rollback /fusion-tune-rollback ${applied.id.slice(0, 8)}`);
@@ -933,8 +942,10 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     handler: async (args, ctx) => {
       const id = firstArg(args);
       const proposals = await loadProposals(configPath);
-      const proposal = proposals.find((item) => item.id.startsWith(id ?? "") && item.status === "proposed");
-      if (!proposal) { report(ctx, "fusion tune: no proposed proposal matches", "warning"); return; }
+      const proposal = id
+        ? proposals.find((item) => item.id.startsWith(id) && item.status === "proposed")
+        : undefined;
+      if (!proposal) { report(ctx, "fusion tune: no proposed proposal matches (pass an id)", "warning"); return; }
       await setProposalStatus({ ...proposal, status: "denied" as const }, "denied", configPath);
       state.proposals = await loadProposals(configPath);
       report(ctx, "fusion tune: denied");
@@ -945,8 +956,10 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     handler: async (args, ctx) => {
       const id = firstArg(args);
       const proposals = await loadProposals(configPath);
-      const proposal = proposals.find((item) => item.id.startsWith(id ?? "") && item.status === "applied");
-      if (!proposal) { report(ctx, "fusion tune: no applied proposal matches", "warning"); return; }
+      const proposal = id
+        ? proposals.find((item) => item.id.startsWith(id) && item.status === "applied")
+        : undefined;
+      if (!proposal) { report(ctx, "fusion tune: no applied proposal matches (pass an id)", "warning"); return; }
       const rolled = await rollbackProposal(proposal, configPath);
       state.proposals = await loadProposals(configPath);
       report(ctx, `fusion tune: rolled back · ${rolled.id.slice(0, 8)}`);

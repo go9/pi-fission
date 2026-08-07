@@ -210,12 +210,15 @@ export async function saveSetupState(configPath: string, state: SetupState): Pro
   await writeFile(path, `${JSON.stringify(state, null, 2)}\n`, "utf8");
 }
 
-/** True when active mode may proceed: seven probed profiles, all passing. */
+/** True when active mode may proceed: seven probed profiles, all passing,
+ *  and every probe target still matches the configured target for that profile. */
 export function isActiveReady(config: FusionConfig, setup: SetupState): boolean {
   if (config.mode !== "active") return false;
   if (!setup.complete) return false;
   return CANONICAL_PROFILES.every((profile) => {
     const probe = setup.probes[profile];
-    return probe !== undefined && probe.ok;
+    return probe !== undefined
+      && probe.ok
+      && probe.modelId === config.profiles[profile].modelId;
   });
 }

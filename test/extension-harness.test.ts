@@ -314,6 +314,40 @@ describe("Pi observer extension shadow mode", () => {
     }
   });
 
+  it("allows /fusion-mode active once all seven probes pass", async () => {
+    const mock = await listen((request, response) => {
+      if (request.url === "/v1/models") {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ data: [
+          { id: "fusion-explore" }, { id: "fusion-sidekick" }, { id: "fusion-plan" },
+          { id: "fusion-reviewer" }, { id: "fusion-research" }, { id: "fusion-vision" }, { id: "fusion-design" },
+        ] }));
+        return;
+      }
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }));
+    });
+    const base = validConfig();
+    const config = validConfig({ provider: { ...base.provider, baseUrl: mock.baseUrl } });
+    const { dir, path: configPath } = await writeConfig(config);
+    const runtime = fakeApi();
+    const stderr: string[] = [];
+    try {
+      await createFusionExtension(runtime.api, {
+        configPath,
+        env: { TEST_9ROUTER_KEY: "test" },
+        stderr: (message) => stderr.push(message),
+      });
+      const context = fakeContext(tmpdir(), [], "json");
+      // Complete the durable setup state before requesting active.
+      await runtime.commands.get("fusion-setup")?.("", context);
+      await runtime.commands.get("fusion-mode")?.("active", context);
+      assert.ok(stderr.some((line) => line.includes("fusion mode: active")), `mode applied: ${stderr.join(" | ")}`);
+    } finally {
+      await mock.close();
+    }
+  });
+
   it("registers only the namespaced 9Router provider fallback when discovery is unavailable", async () => {
     const config = validConfig({ provider: { ...validConfig().provider, baseUrl: "http://127.0.0.1:1/v1", timeoutMs: 50 } });
     const { path: configPath } = await writeConfig(config);

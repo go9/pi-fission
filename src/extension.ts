@@ -31,6 +31,7 @@ import {
   type AggregateUsage,
 } from "./telemetry.ts";
 import { diagnoseSetup, isActiveReady, loadSetupState, probeAll, saveSetupState, type SetupDiagnostic } from "./setup.ts";
+import { resolveFlickerProject, createPlanningTicket, syncFlickerStatus } from "./flicker-adapter.ts";
 import {
   activeWorkflowForRepo,
   advanceWorkflow,
@@ -520,10 +521,30 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       state.workflow = existing;
       return;
     }
+    // Flicker adapter selection: when the repository resolves a Flicker project,
+    // the workflow is projected into Flicker truth (planning ticket + docs are
+    // the plan itself and are permitted before mutation approval).
+    let adapter: "session" | "flicker" = "session";
+    let flickerTicketId: string | null = null;
+    try {
+      const resolution = await resolveFlickerProject(repo, { env: environment });
+      if (resolution.ok && resolution.projectSlug) {
+        adapter = "flicker";
+        const ticket = await createPlanningTicket(
+          repo,
+          "Pi Fusion managed workflow",
+          `Managed by Pi Fusion for ${repo}. Planning documents and evidence are projected into Flicker.`,
+          { env: environment },
+        );
+        flickerTicketId = ticket.ok ? ticket.ticketId : null;
+      }
+    } catch {
+      // Flicker unavailable is non-fatal; the workflow stays session-adapter.
+    }
     workflow = createWorkflowState({
       repo,
-      adapter: "session",
-      flickerTicketId: null,
+      adapter,
+      flickerTicketId,
       classification: state.classification,
       mode: state.config.config.mode,
       ownerSession: getSessionId(ctx),
@@ -769,6 +790,9 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
         state.workflow = workflow;
         await persistWorkflowState();
       }
+      if (workflow.status === "complete" && workflow.adapter === "flicker" && workflow.flickerTicketId) {
+        await syncFlickerStatus(workflow.flickerTicketId, workflow.status, { env: environment }).catch(() => undefined);
+      }
       await recordActiveOutcome(node);
     }
     updateFooter(state, ctx);
@@ -913,6 +937,9 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       });
       state.workflow = workflow;
       await persistWorkflowState();
+      if (workflow.adapter === "flicker" && workflow.flickerTicketId) {
+        await syncFlickerStatus(workflow.flickerTicketId, workflow.status, { env: environment }).catch(() => undefined);
+      }
       userOverrideActive = false;
       report(ctx, `fusion plan: approved · envelope v${workflow.envelope?.version} · running`);
     },

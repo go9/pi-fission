@@ -82,6 +82,20 @@ async function emit(handlers: Map<string, Handler[]>, context: ExtensionContext,
   }
 }
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => { resolve = complete; });
+  return { promise, resolve };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (predicate()) return;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.fail("timed out waiting for test condition");
+}
+
 describe("Pi observer extension shadow mode", () => {
   it("proves observation makes zero selection, delegation, or project mutation calls across TUI/print/JSON/RPC", async () => {
     const mock = await listen((_request, response) => {
@@ -369,6 +383,117 @@ describe("Pi Fusion one-shot active routing", () => {
       for (const sentinel of ["PROMPT_SENTINEL", "CREDENTIAL_SENTINEL", "SOURCE_SENTINEL", "TOOL_OUTPUT_SENTINEL", "tenant-a"]) {
         assert.doesNotMatch(telemetry, new RegExp(sentinel));
       }
+    } finally {
+      await fixture.mock.close();
+    }
+  });
+
+  it("reapplies a user model selected during delayed internal restoration", async () => {
+    const restoreGate = deferred<boolean>();
+    const fixture = await readyOneShotRuntime((_model, callIndex) => callIndex === 1 ? restoreGate.promise : true);
+    const notifications: string[] = [];
+    const previous = { id: "current", provider: "existing", name: "Existing" };
+    const context = fakeContext(tmpdir(), notifications, "tui", previous, fixture.models);
+    try {
+      await fixture.runtime.commands.get("fusion-route-once")?.("", context);
+      await emit(fixture.runtime.handlers, context, "before_agent_start", {
+        prompt: "implement a code fix", images: [],
+      });
+      const target = fixture.runtime.selectionCalls[0];
+      await emit(fixture.runtime.handlers, context, "model_select", {
+        model: target, previousModel: previous, source: "set",
+      });
+      (context as any).model = target;
+      await emit(fixture.runtime.handlers, context, "turn_end", {
+        turnIndex: 0, message: { usage: { input: 1, output: 1 } }, toolResults: [],
+      });
+
+      const settling = emit(fixture.runtime.handlers, context, "agent_settled", {});
+      await waitFor(() => fixture.runtime.selectionCalls.length === 2);
+      const userModel = { id: "user-final", provider: "user-provider", name: "User Final" };
+      await emit(fixture.runtime.handlers, context, "model_select", {
+        model: userModel, previousModel: target, source: "set",
+      });
+      (context as any).model = userModel;
+      restoreGate.resolve(true);
+      await settling;
+
+      assert.equal(fixture.runtime.selectionCalls.length, 3);
+      assert.equal(fixture.runtime.selectionCalls[1], previous, "internal restoration remains an explicit transaction");
+      assert.equal(fixture.runtime.selectionCalls[2], userModel, "latest user selection is reapplied after delayed restore");
+      await fixture.runtime.commands.get("fusion-status")?.("", context);
+      assert.ok(notifications.some((line) => line.includes("one-shot user-overrode")));
+      assert.ok(notifications.some((line) => line.includes("active Pi model: user-provider/user-final")));
+    } finally {
+      await fixture.mock.close();
+    }
+  });
+
+  it("restores on normal session shutdown before agent settlement", async () => {
+    const fixture = await readyOneShotRuntime();
+    const notifications: string[] = [];
+    const previous = { id: "current", provider: "existing", name: "Existing" };
+    const context = fakeContext(tmpdir(), notifications, "tui", previous, fixture.models);
+    try {
+      await fixture.runtime.commands.get("fusion-route-once")?.("", context);
+      await emit(fixture.runtime.handlers, context, "before_agent_start", {
+        prompt: "implement a code fix", images: [],
+      });
+      const target = fixture.runtime.selectionCalls[0];
+      await emit(fixture.runtime.handlers, context, "model_select", {
+        model: target, previousModel: previous, source: "set",
+      });
+      (context as any).model = target;
+      await emit(fixture.runtime.handlers, context, "turn_end", {
+        turnIndex: 0, message: { usage: { input: 1, output: 1 } }, toolResults: [],
+      });
+
+      await emit(fixture.runtime.handlers, context, "session_shutdown", {});
+      assert.equal(fixture.runtime.selectionCalls.length, 2);
+      assert.equal(fixture.runtime.selectionCalls[1], previous, "shutdown awaits exact prior-model restoration");
+      assert.ok(notifications.includes("status:pi-fusion:cleared"));
+
+      await emit(fixture.runtime.handlers, context, "agent_settled", {});
+      assert.equal(fixture.runtime.selectionCalls.length, 2, "later settlement cannot duplicate shutdown restoration");
+      const telemetry = await readFile(join(fixture.written.dir, "telemetry.jsonl"), "utf8");
+      assert.equal(telemetry.trim().split("\n").length, 1, "shutdown and settlement append one record total");
+      assert.match(telemetry, /"routeOnceStatus":"restored"/);
+    } finally {
+      await fixture.mock.close();
+    }
+  });
+
+  it("keeps an already-current target active until settlement without duplicate telemetry", async () => {
+    const fixture = await readyOneShotRuntime();
+    const notifications: string[] = [];
+    const current = fixture.models.find((model) => model.id === "pi-reason");
+    assert.ok(current);
+    const context = fakeContext(tmpdir(), notifications, "tui", current, fixture.models);
+    try {
+      await fixture.runtime.commands.get("fusion-route-once")?.("", context);
+      await emit(fixture.runtime.handlers, context, "before_agent_start", {
+        prompt: "Plan the architecture for a complex migration", images: [],
+      });
+      assert.equal(fixture.runtime.selectionCalls.length, 0, "already-current target requires no model API call");
+
+      await fixture.runtime.commands.get("fusion-route-once")?.("", context);
+      assert.ok(notifications.some((line) => line.includes("already active")), "same-target run rejects a stacked arm");
+      await emit(fixture.runtime.handlers, context, "turn_end", {
+        turnIndex: 0, message: { usage: { input: 1, output: 1 } }, toolResults: [],
+      });
+      await emit(fixture.runtime.handlers, context, "turn_end", {
+        turnIndex: 1, message: { usage: { input: 2, output: 1 } }, toolResults: [],
+      });
+      assert.equal((await readdir(fixture.written.dir)).includes("telemetry.jsonl"), false, "intermediate turns do not persist applied records");
+
+      await emit(fixture.runtime.handlers, context, "agent_settled", {});
+      assert.equal(fixture.runtime.selectionCalls.length, 0, "same-target settlement requires no restoration call");
+      const telemetry = await readFile(join(fixture.written.dir, "telemetry.jsonl"), "utf8");
+      assert.equal(telemetry.trim().split("\n").length, 1, "one settled run creates one telemetry record");
+      assert.match(telemetry, /"routeOnceStatus":"restored"/);
+
+      await fixture.runtime.commands.get("fusion-route-once")?.("", context);
+      assert.equal(notifications.filter((line) => line.includes("one-shot armed · exactly")).length, 2, "a fresh arm is allowed only after settlement");
     } finally {
       await fixture.mock.close();
     }

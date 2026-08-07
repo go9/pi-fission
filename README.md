@@ -68,7 +68,7 @@ Plan a small, clearly scoped implementation.
 /fusion-status
 ```
 
-The arm is consumed before model lookup or selection, so an unavailable provider, low-confidence/no-eligible recommendation, registry miss, or selection failure cannot unexpectedly route a later prompt. A successful differing selection is held across all tool turns, retries, and queued continuations, then restored only at `agent_settled`. Selecting a model yourself during the active run cancels stale restoration so your choice wins. No configuration migration or persistent active toggle exists.
+The arm is consumed before model lookup or selection, so an unavailable provider, low-confidence/no-eligible recommendation, registry miss, or selection failure cannot unexpectedly route a later prompt. A successful route is one active transaction across all tool turns, retries, and queued continuations, even when the recommended model was already current. It restores only at `agent_settled` or during normal awaited session shutdown/reload. Selecting a model yourself during the active run or a delayed restore keeps your choice final. No configuration migration or persistent active toggle exists.
 
 The extension uses no dialogs. In print/JSON modes it does not prompt or install a footer; explicit `/fusion-*` commands write safe status text to stderr so JSON stdout remains machine-readable. In RPC/TUI modes commands use Pi notifications.
 
@@ -90,7 +90,7 @@ For isolated smoke tests without changing global Pi settings, set `PI_FUSION_CON
 
 ## Rollback
 
-One-shot state is memory-only and disappears on Pi reload/restart. To stop a pending test, reload Pi before submitting the next task. To roll back the package, remove its local package entry with Pi's normal uninstall command or point that entry back to a reviewed shadow-only checkout; the extension has no project data or workflow state to migrate. Delete the telemetry JSONL independently if local routing evidence should be removed.
+One-shot state is memory-only. Normal Pi reload/shutdown awaits a best-effort restoration before the state disappears; to stop an armed-but-not-started test, reload Pi before submitting the next task. An uncatchable process death such as `SIGKILL`, kernel termination, or power loss cannot run the shutdown hook and may leave the routed model selected on the next launch; manually select the prior model if that occurs. To roll back the package, remove its local package entry with Pi's normal uninstall command or point that entry back to a reviewed shadow-only checkout; the extension has no project data or workflow state to migrate. Delete the telemetry JSONL independently if local routing evidence should be removed.
 
 ## Development
 

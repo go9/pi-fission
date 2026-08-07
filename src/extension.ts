@@ -178,8 +178,12 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   const stderr = options.stderr ?? ((message: string) => process.stderr.write(message));
   let restoreModel: ActivePiModel | null = null;
   let routeOnceActive = false;
+  let routeChangedModel = false;
   let deferTelemetryUntilSettled = false;
   let expectedInternalSelection: ModelIdentity | null = null;
+  let restorationInProgress = false;
+  let restorationPromise: Promise<void> | null = null;
+  let userSelectionDuringRestore: ActivePiModel | null = null;
 
   const setActiveModel = (identity: ModelIdentity | null): void => {
     state.activeModel = displayModel(identity);
@@ -222,12 +226,108 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
     state.outcome = "unknown";
   };
 
+  const takeUserSelectionDuringRestore = (): ActivePiModel | null => {
+    const selected = userSelectionDuringRestore;
+    userSelectionDuringRestore = null;
+    return selected;
+  };
+
+  const restoreOneShot = async (ctx: ExtensionContext): Promise<void> => {
+    if (restorationPromise) return restorationPromise;
+    if (!routeOnceActive) return;
+
+    restorationPromise = (async () => {
+      const previous = restoreModel;
+      let restored = false;
+      if (previous && routeChangedModel) {
+        restorationInProgress = true;
+        userSelectionDuringRestore = null;
+        expectedInternalSelection = { provider: previous.provider, id: previous.id };
+        try {
+          restored = await pi.setModel(previous);
+        } catch {
+          restored = false;
+        }
+        expectedInternalSelection = null;
+
+        let userSelection = takeUserSelectionDuringRestore();
+        while (userSelection) {
+          expectedInternalSelection = { provider: userSelection.provider, id: userSelection.id };
+          let retained = false;
+          try {
+            retained = await pi.setModel(userSelection);
+          } catch {
+            retained = false;
+          }
+          expectedInternalSelection = null;
+          if (!retained) {
+            restored = false;
+            state.routeOnceStatus = "restore-failed";
+            state.routeOnceReason = "restore-failed";
+            break;
+          }
+          restored = true;
+          state.routeOnceStatus = "user-overrode";
+          state.routeOnceReason = "user-selected-model";
+          setActiveModel({ provider: userSelection.provider, id: userSelection.id });
+          userSelection = takeUserSelectionDuringRestore();
+        }
+        restorationInProgress = false;
+
+        if (state.routeOnceStatus !== "user-overrode" && state.routeOnceStatus !== "restore-failed") {
+          if (restored) {
+            state.routeOnceStatus = "restored";
+            state.routeOnceReason = null;
+            setActiveModel({ provider: previous.provider, id: previous.id });
+          } else {
+            state.routeOnceStatus = "restore-failed";
+            state.routeOnceReason = "restore-failed";
+          }
+        }
+      } else if (previous) {
+        // The recommended model was already current; the run is still one active
+        // one-shot transaction, but settlement requires no model API call.
+        state.routeOnceStatus = "restored";
+        state.routeOnceReason = null;
+        setActiveModel({ provider: previous.provider, id: previous.id });
+      }
+
+      routeOnceActive = false;
+      routeChangedModel = false;
+      restoreModel = null;
+      expectedInternalSelection = null;
+      restorationInProgress = false;
+      userSelectionDuringRestore = null;
+    })();
+
+    try {
+      await restorationPromise;
+    } finally {
+      restorationPromise = null;
+    }
+    updateFooter(state, ctx);
+  };
+
+  const finishOneShot = async (ctx: ExtensionContext): Promise<void> => {
+    await restoreOneShot(ctx);
+    if (deferTelemetryUntilSettled) {
+      // Clear before awaiting so concurrent settlement/shutdown events cannot
+      // append a duplicate record for the same one-shot run.
+      deferTelemetryUntilSettled = false;
+      await persist();
+    }
+    updateFooter(state, ctx);
+  };
+
   pi.on("session_start", (_event, ctx) => {
     setActiveModel(modelIdentity(ctx));
     updateFooter(state, ctx);
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
+  pi.on("session_shutdown", async (_event, ctx) => {
+    // Normal reload/shutdown is an awaited best-effort rollback boundary.
+    // An uncatchable process death (for example SIGKILL) cannot run this hook.
+    await finishOneShot(ctx);
     if (ctx.mode === "tui") ctx.ui.setStatus("pi-fusion", undefined);
   });
 
@@ -277,6 +377,10 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       return;
     }
     if (previous.provider === target.provider && previous.id === target.id) {
+      restoreModel = previous;
+      routeOnceActive = true;
+      routeChangedModel = false;
+      deferTelemetryUntilSettled = true;
       state.routeOnceStatus = "applied";
       state.routeOnceReason = "already-selected";
       setActiveModel({ provider: target.provider, id: target.id });
@@ -303,6 +407,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
 
     restoreModel = previous;
     routeOnceActive = true;
+    routeChangedModel = true;
     deferTelemetryUntilSettled = true;
     state.routeOnceStatus = "applied";
     setActiveModel({ provider: target.provider, id: target.id });
@@ -340,9 +445,17 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       && expectedInternalSelection.id === selected.id;
     if (internal) {
       expectedInternalSelection = null;
+    } else if (restorationInProgress) {
+      // Keep the restoration transaction active. If the internal restore lands
+      // after this user choice, restoreOneShot reapplies the latest user model.
+      userSelectionDuringRestore = event.model;
+      state.routeOnceStatus = "user-overrode";
+      state.routeOnceReason = "user-selected-model";
     } else if (routeOnceActive) {
-      routeOnceActive = false;
+      // A user choice during the routed run cancels stale restoration, but the
+      // one-shot remains active until settlement so another arm cannot stack.
       restoreModel = null;
+      routeChangedModel = false;
       state.routeOnceStatus = "user-overrode";
       state.routeOnceReason = "user-selected-model";
     }
@@ -351,32 +464,7 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
-    if (routeOnceActive && restoreModel) {
-      const previous = restoreModel;
-      routeOnceActive = false;
-      restoreModel = null;
-      expectedInternalSelection = { provider: previous.provider, id: previous.id };
-      let restored = false;
-      try {
-        restored = await pi.setModel(previous);
-      } catch {
-        restored = false;
-      }
-      expectedInternalSelection = null;
-      if (restored) {
-        state.routeOnceStatus = "restored";
-        state.routeOnceReason = null;
-        setActiveModel({ provider: previous.provider, id: previous.id });
-      } else {
-        state.routeOnceStatus = "restore-failed";
-        state.routeOnceReason = "restore-failed";
-      }
-    }
-    if (deferTelemetryUntilSettled) {
-      deferTelemetryUntilSettled = false;
-      await persist();
-    }
-    updateFooter(state, ctx);
+    await finishOneShot(ctx);
   });
 
   const report = (ctx: ExtensionContext, message: string): void => show(ctx, message, healthLevel(state), stderr);

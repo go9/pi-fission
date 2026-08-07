@@ -49,6 +49,8 @@ export interface PolicyInput {
   providerReady: boolean;
   /** Effective profile targets after project overrides (maps profile -> model id). */
   overrideTargets?: Partial<Record<CanonicalProfile, string>>;
+  /** When set (active workflow node), route through this profile if eligible. */
+  forceProfile?: CanonicalProfile | null;
 }
 
 export function recommend(input: PolicyInput): Recommendation {
@@ -77,6 +79,26 @@ export function recommend(input: PolicyInput): Recommendation {
       modelId: null,
       confidence: classification.confidence,
       reasonCodes: [...classification.reasonCodes, "policy.low-confidence"],
+      evaluations,
+    };
+  }
+
+  const forced = input.forceProfile ? evaluations.find((item) => item.profile === input.forceProfile) : undefined;
+  if (forced?.eligible) {
+    return {
+      profile: forced.profile,
+      modelId: forced.modelId,
+      confidence: classification.confidence,
+      reasonCodes: [...classification.reasonCodes, "policy.workflow-node"],
+      evaluations,
+    };
+  }
+  if (forced) {
+    return {
+      profile: null,
+      modelId: null,
+      confidence: classification.confidence,
+      reasonCodes: [...classification.reasonCodes, "policy.workflow-node-ineligible"],
       evaluations,
     };
   }

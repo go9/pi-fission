@@ -33,12 +33,14 @@ import {
 import { diagnoseSetup, isActiveReady, loadSetupState, probeAll, saveSetupState, type SetupDiagnostic } from "./setup.ts";
 import {
   activeWorkflowForRepo,
+  advanceWorkflow,
   approveWorkflow,
   cancelWorkflow,
   createWorkflowState,
   foreignOwnerForRepo,
   pauseWorkflow,
   resumeWorkflow,
+  runningNode,
   upsertWorkflow,
   type WorkflowState,
 } from "./workflow.ts";
@@ -53,6 +55,7 @@ import {
   setProposalStatus,
   type TuningProposal,
 } from "./tuning.ts";
+import type { WorkflowNode } from "./types.ts";
 import type {
   ActiveModelCategory,
   CanonicalProfile,
@@ -301,7 +304,17 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
       effectiveCapabilities: state.discovery.effectiveCapabilities,
       providerReady: state.discovery.status === "ready",
       overrideTargets: workflowTargets(),
+      // In active mode with an approved workflow, the running node's semantic
+      // profile wins so each stage uses its intended model.
+      forceProfile: activeWorkflowNodeProfile(),
     });
+  };
+
+  const activeWorkflowNodeProfile = (): CanonicalProfile | null => {
+    if (state.config.status !== "ready" || state.config.config.mode !== "active") return null;
+    if (!workflow || workflow.status !== "running") return null;
+    const node = runningNode(workflow);
+    return node?.profile ?? null;
   };
 
   const workflowTargets = (): Partial<Record<CanonicalProfile, string>> | undefined => {
@@ -747,7 +760,45 @@ export async function createFusionExtension(pi: ExtensionAPI, options: FusionExt
 
   pi.on("agent_settled", async (_event, ctx) => {
     await finishOneShot(ctx);
+    // Active workflow: a settled run completes the running node (or marks it
+    // failed on error) and advances the graph to the next stage.
+    if (state.config.status === "ready" && state.config.config.mode === "active" && workflow && workflow.status === "running") {
+      const node = runningNode(workflow);
+      if (node) {
+        workflow = advanceWorkflow(workflow, node.id, state.outcome === "error" ? "failed" : "passed", state.outcome === "error" ? "provider/tool error" : undefined);
+        state.workflow = workflow;
+        await persistWorkflowState();
+      }
+      await recordActiveOutcome(node);
+    }
+    updateFooter(state, ctx);
   });
+
+  const recordActiveOutcome = async (node: WorkflowNode | null): Promise<void> => {
+    if (state.config.status !== "ready" || !state.recommendation) return;
+    const config = state.config.config;
+    try {
+      await recordOutcome(config, {
+        schemaVersion: 1,
+        timestamp: new Date().toISOString(),
+        workflowId: workflow?.id ?? null,
+        nodeKind: node?.kind ?? null,
+        profile: state.recommendation.profile,
+        backend: "direct",
+        routeConfidence: state.recommendation.confidence,
+        phase: state.classification?.phase ?? "unknown",
+        risk: state.classification?.risk ?? "unknown",
+        accepted: state.outcome !== "error",
+        retries: 0,
+        switches: 0,
+        usage: state.usage,
+        failure: state.outcome === "error" ? "provider/tool error" : null,
+        tuningVersion: 0,
+      }, configPath);
+    } catch {
+      // Outcome recording is best-effort and never breaks the session.
+    }
+  };
 
   const persistWorkflowState = async (): Promise<WorkflowState | null> => {
     if (!workflow) return null;

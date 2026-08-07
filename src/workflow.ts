@@ -52,6 +52,21 @@ function nodeKindDependencies(kind: WorkflowNodeKind): string[] {
   return [];
 }
 
+/** Map a workflow node kind to its semantic profile. */
+export function nodeKindProfile(kind: WorkflowNodeKind): CanonicalProfile {
+  switch (kind) {
+    case "clarify": return "fast";
+    case "explore": return "fast";
+    case "research": return "research";
+    case "plan": return "reason";
+    case "plan-review": return "review";
+    case "implement": return "code";
+    case "review": return "review";
+    case "regression": return "review";
+    case "release-readiness": return "reason";
+  }
+}
+
 export function createWorkflowState(input: {
   repo: string;
   adapter: "session" | "flicker";
@@ -68,8 +83,8 @@ export function createWorkflowState(input: {
   const nodes: WorkflowNode[] = kinds.map((kind, index) => ({
     id: `node-${index + 1}`,
     kind,
-    profile: null,
-    status: index === 0 ? "pending" : "pending",
+    profile: nodeKindProfile(kind),
+    status: "pending",
     dependsOn: nodeKindDependencies(kind),
     createdAt: timestamp,
     startedAt: null,
@@ -104,6 +119,11 @@ export function approveWorkflow(workflow: WorkflowState, envelope: Omit<Approval
     updated.nodes = updated.nodes.map((node) => (node.id === firstPending.id ? { ...node, status: "running", startedAt: new Date().toISOString() } : node));
   }
   return updated;
+}
+
+/** The currently running node, or null when none is active. */
+export function runningNode(workflow: WorkflowState): WorkflowNode | null {
+  return workflow.nodes.find((node) => node.status === "running") ?? null;
 }
 
 export function advanceWorkflow(workflow: WorkflowState, nodeId: string, status: "passed" | "failed" | "blocked", error?: string, now?: () => Date): WorkflowState {

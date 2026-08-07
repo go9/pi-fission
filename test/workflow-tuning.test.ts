@@ -19,7 +19,7 @@ import {
   upsertWorkflow,
 } from "../src/workflow.ts";
 import { recordOutcome, buildTuningProposal, loadProposals, saveProposal, applyProposal, rollbackProposal, loadOutcomes } from "../src/tuning.ts";
-import type { OutcomeRecord } from "../src/types.ts";
+import type { CanonicalProfile, OutcomeRecord } from "../src/types.ts";
 import { validConfig } from "../test-support/helpers.ts";
 
 describe("workflow planning and runtime", () => {
@@ -160,5 +160,35 @@ describe("permission-gated tuning", () => {
     const rolled = await rollbackProposal(applied, configPath);
     assert.equal(rolled.status, "rolled-back");
     assert.equal(rolled.applied, false);
+  });
+});
+
+describe("workflow node profile mapping and forced routing", () => {
+  it("assigns every workflow node a semantic profile", () => {
+    const classification = classify({ text: "Implement a TypeScript helper and tests" });
+    const workflow = createWorkflowState({
+      repo: "/repo", adapter: "session", flickerTicketId: null, classification,
+      mode: "active", ownerSession: "s1", ownerPid: 1,
+    });
+    for (const node of workflow.nodes) {
+      assert.ok(node.profile, `node ${node.kind} has a profile`);
+    }
+    assert.equal(workflow.nodes.find((node) => node.kind === "plan")?.profile, "reason");
+    assert.equal(workflow.nodes.find((node) => node.kind === "implement")?.profile, "code");
+    assert.equal(workflow.nodes.find((node) => node.kind === "review")?.profile, "review");
+  });
+
+  it("forceProfile routes through the workflow node profile when eligible", async () => {
+    const { recommend } = await import("../src/policy.ts");
+    const allModels = Object.fromEntries(
+      ["fast", "code", "reason", "review", "research", "vision", "design"].map((p) => [p, p]),
+    ) as Record<CanonicalProfile, string>;
+    const classification = classify({ text: "implement a code fix" });
+    const route = recommend({
+      classification, config: validConfig(), resolvedModels: allModels, providerReady: true,
+      forceProfile: "review",
+    });
+    assert.equal(route.profile, "review");
+    assert.ok(route.reasonCodes.includes("policy.workflow-node"));
   });
 });

@@ -29,7 +29,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --test --test-concurrency=1",
-    "test:integration": "node --test --test-concurrency=1 test/router.integration.test.ts test/extension-harness.test.ts"
+    "test:integration": "node --test --test-concurrency=1 test/router.integration.test.ts test/extension-harness.test.ts test/pi-host-loader.test.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

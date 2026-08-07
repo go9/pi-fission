@@ -1,4 +1,4 @@
-import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/api/openai-completions";
+import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defaultConfigPath, loadConfig, telemetryPath, type ConfigResult } from "./config.ts";
 import { classify, observeToolPhase } from "./classifier.ts";

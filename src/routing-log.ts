@@ -147,7 +147,11 @@ export function sessionSummaries(entries: RoutingLogEntry[], now: number = Date.
 function sessionLabel(summary: SessionSummary, mainSessionId: string): string {
   if (summary.sessionId === mainSessionId) return "main";
   if (summary.agent) return summary.agent;
-  return summary.sessionName ?? `sub ${summary.sessionId.slice(0, 8)}`;
+  if (summary.sessionName) return summary.sessionName;
+  // No stable name: short phase label, not a throwaway id. The reason column already
+  // carries the human activity summary.
+  const phase = summary.phase === "unknown" ? null : summary.phase;
+  return phase ?? `worker ${summary.sessionId.slice(0, 8)}`;
 }
 
 /** Widget rows: one compact line collapsed, per-agent rows expanded. */

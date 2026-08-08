@@ -64,7 +64,8 @@ describe("routing log", () => {
     await appendRoutingEntry(configPath, baseEntry({ sessionId: "main", ts: "2026-08-07T10:00:00.000Z" }));
     await appendRoutingEntry(configPath, baseEntry({
       sessionId: "child",
-      sessionName: "reviewer",
+      parentSessionId: "main",
+      childAgent: "reviewer",
       ts: "2026-08-07T10:01:00.000Z",
       phase: "review",
       profile: "review",
@@ -72,15 +73,35 @@ describe("routing log", () => {
       reason: "reviewing the work",
     }));
     await appendRoutingEntry(configPath, baseEntry({ sessionId: "stale", ts: "2026-08-01T00:00:00.000Z" }));
-    const summaries = sessionSummaries(await readRoutingEntries(configPath), Date.parse("2026-08-07T10:02:00.000Z"));
+    const now = Date.parse("2026-08-07T10:02:00.000Z");
+    const summaries = sessionSummaries(await readRoutingEntries(configPath), now);
     assert.equal(summaries.length, 2, "stale session is windowed out");
-    const collapsed = widgetRows(summaries, "main", false);
+    const scoped = sessionSummaries(await readRoutingEntries(configPath), now, "main");
+    assert.equal(scoped.length, 2, "scoped to main + child");
+    assert.equal(scoped.some((s) => s.sessionId === "child"), true);
+    assert.equal(scoped.some((s) => s.agent === "reviewer"), true);
+    const collapsed = widgetRows(scoped, "main", false);
     assert.equal(collapsed[0], "fission: 2 agents routing · ctrl+alt+f for details");
-    const expanded = widgetRows(summaries, "main", true);
-    assert.ok(expanded.some((row) => /main\s+fission-sidekick · writing code/.test(row)));
-    assert.ok(expanded.some((row) => /reviewer\s+fission-reviewer · reviewing the work/.test(row)));
+    const expanded = widgetRows(scoped, "main", true);
+    assert.ok(expanded.some((row) => /main\s+fission-sidekick · writing code \(code\)/.test(row)));
+    assert.ok(expanded.some((row) => /reviewer\s+fission-reviewer · reviewing the work \(review\)/.test(row)));
     assert.doesNotMatch(expanded.join("\n"), /secret|prompt text/i);
-    assert.match(formatAgents(summaries, "main"), /reviewer — fission-reviewer · reviewing the work/);
+    assert.match(formatAgents(scoped, "main"), /reviewer — fission-reviewer · reviewing the work \(review\)/);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("scopes summaries to the session and its subagents, excluding foreign sessions", async () => {
+    const dir = await import("node:fs/promises").then((fs) => fs.mkdtemp(join(tmpdir(), "fission-scope-")));
+    const configPath = join(dir, "pi-fission.json");
+    const now = Date.parse("2026-08-07T10:05:00.000Z");
+    await appendRoutingEntry(configPath, baseEntry({ sessionId: "main", ts: "2026-08-07T10:00:00.000Z" }));
+    await appendRoutingEntry(configPath, baseEntry({ sessionId: "child", parentSessionId: "main", childAgent: "explorer", ts: "2026-08-07T10:01:00.000Z", phase: "explore", profile: "fast", toModel: "fission-explore", reason: "exploring the codebase" }));
+    await appendRoutingEntry(configPath, baseEntry({ sessionId: "cardhoard", ts: "2026-08-07T10:02:00.000Z" }));
+    await appendRoutingEntry(configPath, baseEntry({ sessionId: "grandchild", parentSessionId: "child", childAgent: "verify", ts: "2026-08-07T10:03:00.000Z", phase: "review", profile: "review", toModel: "fission-reviewer", reason: "reviewing the work" }));
+    const scoped = sessionSummaries(await readRoutingEntries(configPath), now, "main");
+    const ids = scoped.map((s) => s.sessionId).sort();
+    assert.deepEqual(ids, ["child", "main"], "grandchild belongs to child, not main; foreign session excluded");
+    assert.ok(scoped.some((s) => s.agent === "explorer"));
     await rm(dir, { recursive: true, force: true });
   });
 

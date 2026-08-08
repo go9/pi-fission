@@ -383,6 +383,8 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
       ts: new Date().toISOString(),
       sessionId: state.sessionId,
       sessionName: getSessionName(ctx),
+      parentSessionId: environment.PI_SUBAGENT_PARENT_SESSION,
+      childAgent: environment.PI_SUBAGENT_CHILD_AGENT ?? environment.PI_SUBAGENT_RUN_ID,
       cwd: ctx.cwd,
       kind,
       phase: state.classification?.phase ?? "unknown",
@@ -415,7 +417,7 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
       }
     }
     const entries = await readRoutingEntries(configPath);
-    const summaries = sessionSummaries(entries, Date.now());
+    const summaries = sessionSummaries(entries, Date.now(), state.sessionId);
     widgetCtx.ui.setWidget("pi-fission-agents", widgetRows(summaries, state.sessionId, widgetExpanded));
   };
 
@@ -613,8 +615,8 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     handler: async (_args, ctx) => report(ctx, formatRoutingLog(await readRoutingEntries(configPath))),
   });
   pi.registerCommand("fission-agents", {
-    description: "Show a summary of every active Fission agent and the model it is using",
-    handler: async (_args, ctx) => report(ctx, formatAgents(sessionSummaries(await readRoutingEntries(configPath), Date.now()), state.sessionId)),
+    description: "Show a summary of this session's agents (main and subagents) and the model each is using",
+    handler: async (_args, ctx) => report(ctx, formatAgents(sessionSummaries(await readRoutingEntries(configPath), Date.now(), state.sessionId), state.sessionId)),
   });
   pi.registerCommand("fission-setup-status", {
     description: "Show seven-profile setup and probe status",

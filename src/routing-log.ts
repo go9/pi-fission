@@ -8,6 +8,10 @@ export interface RoutingLogEntry {
   ts: string;
   sessionId: string;
   sessionName?: string;
+  /** Root session id this subagent belongs to (from PI_SUBAGENT_PARENT_SESSION). */
+  parentSessionId?: string;
+  /** Subagent name (from PI_SUBAGENT_CHILD_AGENT) or the run id. */
+  childAgent?: string;
   cwd?: string;
   kind: "route" | "retained" | "manual" | "restore-failed";
   phase: Phase | "unknown";
@@ -97,6 +101,7 @@ function formatModel(model: string | null): string {
 export interface SessionSummary {
   sessionId: string;
   sessionName: string | null;
+  agent: string | null;
   currentModel: string | null;
   profile: CanonicalProfile | null;
   phase: Phase | "unknown";
@@ -106,10 +111,15 @@ export interface SessionSummary {
 
 const ACTIVE_WINDOW_MS = 15 * 60_000;
 
-/** Latest entry per session, filtered to a recent window so finished workers drop out. */
-export function sessionSummaries(entries: RoutingLogEntry[], now: number = Date.now()): SessionSummary[] {
+/**
+ * Latest entry per session, filtered to a recent window so finished workers drop out.
+ * When `scopeSessionId` is given, only the session itself plus its subagents (entries
+ * stamped with that session as parent) are summarized; sibling windows stay out.
+ */
+export function sessionSummaries(entries: RoutingLogEntry[], now: number = Date.now(), scopeSessionId?: string): SessionSummary[] {
   const bySession = new Map<string, RoutingLogEntry[]>();
   for (const entry of entries) {
+    if (scopeSessionId && entry.sessionId !== scopeSessionId && entry.parentSessionId !== scopeSessionId) continue;
     const list = bySession.get(entry.sessionId) ?? [];
     list.push(entry);
     bySession.set(entry.sessionId, list);
@@ -122,6 +132,7 @@ export function sessionSummaries(entries: RoutingLogEntry[], now: number = Date.
     summaries.push({
       sessionId,
       sessionName: latest.sessionName ?? null,
+      agent: latest.childAgent ?? null,
       currentModel: latest.kind === "manual" ? latest.fromModel : (latest.toModel ?? latest.fromModel),
       profile: latest.profile,
       phase: latest.phase,
@@ -135,6 +146,7 @@ export function sessionSummaries(entries: RoutingLogEntry[], now: number = Date.
 
 function sessionLabel(summary: SessionSummary, mainSessionId: string): string {
   if (summary.sessionId === mainSessionId) return "main";
+  if (summary.agent) return summary.agent;
   return summary.sessionName ?? `sub ${summary.sessionId.slice(0, 8)}`;
 }
 
@@ -158,7 +170,7 @@ export function formatAgents(summaries: SessionSummary[], mainSessionId: string)
   if (summaries.length === 0) return "fission agents: no active sessions in the last 15 minutes";
   const lines = [`fission agents: ${summaries.length} active`];
   for (const summary of summaries) {
-    lines.push(`  ${sessionLabel(summary, mainSessionId)} — ${summary.currentModel ?? "unknown"} · ${summary.reason}`);
+    lines.push(`  ${sessionLabel(summary, mainSessionId)} — ${summary.currentModel ?? "unknown"} · ${summary.reason}${summary.profile ? ` (${summary.profile})` : ""}`);
   }
   return lines.join("\n");
 }

@@ -19,10 +19,8 @@ export function validConfig(overrides: Partial<FissionConfig> = {}): FissionConf
       vision: { modelId: "fission-vision", capabilities: DEFAULT_PROFILE_CAPABILITIES.vision },
       design: { modelId: "fission-design", capabilities: DEFAULT_PROFILE_CAPABILITIES.design },
     },
-    aliases: { plan: "reason", sidekick: "code", explore: "fast", "small-model": "fast", reviewer: "review", research: "research", vision: "vision", design: "design" },
+    aliases: { plan: "reason", sidekick: "code", explore: "fast", "small-model": "fast", reviewer: "review" },
     projectOverrides: [],
-    telemetry: { enabled: true, file: "telemetry.jsonl", maxEntries: 20 },
-    tuning: { enabled: true, file: "tuning.jsonl", maxEntries: 200, minEvidence: 5, maxFanout: 4, maxDepth: 2, maxRetries: 3, maxSwitches: 4 },
   };
   return {
     ...config,
@@ -31,8 +29,6 @@ export function validConfig(overrides: Partial<FissionConfig> = {}): FissionConf
     profiles: overrides.profiles ?? config.profiles,
     aliases: overrides.aliases ?? config.aliases,
     projectOverrides: overrides.projectOverrides ?? config.projectOverrides,
-    telemetry: { ...config.telemetry, ...overrides.telemetry },
-    tuning: { ...config.tuning, ...overrides.tuning },
   };
 }
 

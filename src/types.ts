@@ -34,18 +34,6 @@ export interface ProjectOverride {
   profiles: Partial<Record<CanonicalProfile, string>>;
 }
 
-/** Retained in config v2 solely for backwards compatibility. Fission no longer tunes itself. */
-export interface TuningConfig {
-  enabled: boolean;
-  file: string;
-  maxEntries: number;
-  minEvidence: number;
-  maxFanout: number;
-  maxDepth: number;
-  maxRetries: number;
-  maxSwitches: number;
-}
-
 export interface FissionConfig {
   version: 2;
   mode: Mode;
@@ -58,13 +46,6 @@ export interface FissionConfig {
   profiles: Record<CanonicalProfile, ProfileConfig>;
   aliases: Record<string, CanonicalProfile>;
   projectOverrides: ProjectOverride[];
-  /** Retained in config v2 for compatibility; the router does not record prompts or outcomes. */
-  telemetry: {
-    enabled: boolean;
-    file: string;
-    maxEntries: number;
-  };
-  tuning: TuningConfig;
 }
 
 export interface Classification {

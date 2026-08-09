@@ -9,7 +9,7 @@ const EMPTY_CAPABILITIES: Capabilities = {
 };
 
 const PROTECTED = /\b(auth(?:entication|orization)?|permission|secret|credential|billing|payment|money|migration|production|deploy|release|publish|delete|destructive|concurren(?:cy|t)|security|encryption)\b/i;
-const REVIEW = /\b(review|audit|critique|regression|verify|validate|find bugs?|pull request|\bpr\b)\b/i;
+const REVIEW = /\b(review|audit|critique|regression|verify|validate|find bugs?|pull request|pr)\b/i;
 const RESEARCH = /\b(research|investigate|compare|upstream|documentation|docs|web|sources?|prior art)\b/i;
 const PLAN = /\b(plan|architect(?:ure)?|design|strategy|approach|trade-?offs?|proposal)\b/i;
 /** UI/product-design surface language. Deliberately excludes the bare word "design" —

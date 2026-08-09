@@ -144,12 +144,11 @@ function show(ctx: ExtensionContext, message: string, level: "info" | "warning",
   else stderr(`[pi-fission] ${message}\n`);
 }
 
-function words(args: string | string[] | undefined): string[] {
-  if (Array.isArray(args)) return args.flatMap((value) => value.trim().split(/\s+/)).filter(Boolean);
+function words(args: string | undefined): string[] {
   return typeof args === "string" ? args.trim().split(/\s+/).filter(Boolean) : [];
 }
 
-function setupMappings(args: string | string[] | undefined): { mappings: Partial<Record<CanonicalProfile, string>>; error: string | null } {
+function setupMappings(args: string | undefined): { mappings: Partial<Record<CanonicalProfile, string>>; error: string | null } {
   const mappings: Partial<Record<CanonicalProfile, string>> = {};
   for (const token of words(args)) {
     const separator = token.indexOf("=");
@@ -183,7 +182,7 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
   if (configResult.status === "ready") {
     discovery = await discoverModels(configResult.config, { fetch: options.fetch, env: environment });
     registerProvider(pi, configResult.config, discovery);
-    setup = await loadSetupState(configPath, { fetch: options.fetch });
+    setup = await loadSetupState(configPath);
   }
 
   const state: RuntimeState = {

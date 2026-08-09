@@ -42,6 +42,8 @@ describe("full-product config", () => {
     assert.ok(result.config?.profiles.fast);
     assert.ok(result.config?.profiles.design, "design profile is added by migration");
     assert.equal(Object.keys(result.config!.profiles).length, 7);
+    assert.ok(!("telemetry" in result.config!), "the dead telemetry section must not survive migration");
+    assert.ok(!("tuning" in result.config!), "the dead tuning section must not survive migration");
   });
 
   it("applies project overrides only to their matching repository", () => {

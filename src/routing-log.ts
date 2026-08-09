@@ -1,5 +1,5 @@
 import { appendFile, readFile, mkdir, rename, stat, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import type { CanonicalProfile, Phase } from "./types.ts";
 
 /** One content-free routing decision. No prompts, code, credentials, or tool output. */
@@ -77,11 +77,7 @@ function currentModelOf(entry: RoutingLogEntry): string | null {
 
 /** Default routing log path, next to the Fission config so every session shares it. */
 export function routingLogPath(configPath: string): string {
-  return joinPath(dirname(configPath), "pi-fission.routing.jsonl");
-}
-
-function joinPath(directory: string, name: string): string {
-  return `${directory.replace(/\/+$/, "")}/${name}`;
+  return join(dirname(configPath), "pi-fission.routing.jsonl");
 }
 
 /** Rewrite the log once it passes this size, keeping the most recent entries. */

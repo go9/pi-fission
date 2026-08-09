@@ -52,32 +52,12 @@ export const DEFAULT_PROFILE_CAPABILITIES: Record<CanonicalProfile, Capabilities
   design: { tools: true, reasoning: true, image: true, structuredOutput: false, contextWindow: 128_000 },
 };
 
-/** Both sections are optional in a hand-written config: they are diagnostics knobs,
- *  and demanding all eleven keys made a perfectly routable config invalid. Omitting
- *  either one means "off with conventional filenames", never a parse error. */
-const DEFAULT_TELEMETRY = { enabled: false, file: "pi-fission.telemetry.jsonl", maxEntries: 200 } as const;
-const DEFAULT_TUNING = {
-  enabled: false,
-  file: "pi-fission.tuning.jsonl",
-  maxEntries: 200,
-  minEvidence: 5,
-  maxFanout: 4,
-  maxDepth: 2,
-  maxRetries: 3,
-  maxSwitches: 4,
-} as const;
-
 export type ConfigResult =
   | { status: "ready"; path: string; config: FissionConfig; diagnostics: [] }
   | { status: "unconfigured" | "invalid-config"; path: string; config: null; diagnostics: string[] };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isLoopbackBaseUrl(value: string | undefined): boolean {
-  if (typeof value !== "string") return false;
-  return isLoopbackUrl(value);
 }
 
 function isProfile(value: string): value is CanonicalProfile {
@@ -143,16 +123,6 @@ export function migrateLegacyConfig(value: Record<string, unknown>): Record<stri
     mode: typeof value.mode === "string" ? value.mode : "shadow",
     profiles: migratedProfiles,
     aliases,
-    tuning: isRecord(value.tuning) ? value.tuning : {
-      enabled: true,
-      file: "tuning.jsonl",
-      maxEntries: 200,
-      minEvidence: 5,
-      maxFanout: 4,
-      maxDepth: 2,
-      maxRetries: 3,
-      maxSwitches: 4,
-    },
   };
 }
 
@@ -191,7 +161,7 @@ export function parseConfig(value: unknown): { config: FissionConfig | null; dia
     }
     if (provider.apiKey !== undefined && (typeof provider.apiKey !== "string" || !/^\$[A-Z_][A-Z0-9_]*$/i.test(provider.apiKey))) {
       errors.push("provider.apiKey must be an environment-variable reference such as $OPENAI_API_KEY");
-    } else if (provider.apiKey === undefined && !isLoopbackBaseUrl(provider.baseUrl as string | undefined)) {
+    } else if (provider.apiKey === undefined && !(typeof provider.baseUrl === "string" && isLoopbackUrl(provider.baseUrl))) {
       errors.push("provider.apiKey is required for non-loopback endpoints");
     }
     if (!Number.isInteger(provider.timeoutMs) || (provider.timeoutMs as number) < 50 || (provider.timeoutMs as number) > 30_000) {
@@ -261,37 +231,11 @@ export function parseConfig(value: unknown): { config: FissionConfig | null; dia
     }
   }
 
-  // An omitted section takes the defaults; a present one is still validated in full,
-  // because a typo in a section you did write is a mistake worth reporting.
-  const telemetry = raw.telemetry === undefined ? { ...DEFAULT_TELEMETRY } : raw.telemetry;
-  if (!isRecord(telemetry)) {
-    errors.push("telemetry must be an object");
-  } else {
-    if (typeof telemetry.enabled !== "boolean") errors.push("telemetry.enabled must be a boolean");
-    if (typeof telemetry.file !== "string" || !/^[a-z0-9][a-z0-9._-]*$/i.test(telemetry.file)) {
-      errors.push("telemetry.file must be a filename inside the extension config directory");
-    }
-    if (!Number.isInteger(telemetry.maxEntries) || (telemetry.maxEntries as number) < 1 || (telemetry.maxEntries as number) > 10_000) {
-      errors.push("telemetry.maxEntries must be an integer from 1 to 10000");
-    }
-  }
+  // The schema carried telemetry/tuning sections before 0.3.0; silently dropping them
+  // (rather than erroring) keeps every config file written against an older version,
+  // including migrated v1 ones, loading under the trimmed v2 shape.
 
-  const tuning = raw.tuning === undefined ? { ...DEFAULT_TUNING } : raw.tuning;
-  if (!isRecord(tuning)) {
-    errors.push("tuning must be an object");
-  } else {
-    if (typeof tuning.enabled !== "boolean") errors.push("tuning.enabled must be a boolean");
-    if (typeof tuning.file !== "string" || !/^[a-z0-9][a-z0-9._-]*$/i.test(tuning.file)) {
-      errors.push("tuning.file must be a filename inside the extension config directory");
-    }
-    for (const key of ["maxEntries", "minEvidence", "maxFanout", "maxDepth", "maxRetries", "maxSwitches"] as const) {
-      if (!Number.isInteger(tuning[key]) || (tuning[key] as number) < 1) {
-        errors.push(`tuning.${key} must be a positive integer`);
-      }
-    }
-  }
-
-  if (errors.length > 0 || !isRecord(provider) || !isRecord(telemetry) || !isRecord(tuning)) {
+  if (errors.length > 0 || !isRecord(provider)) {
     return { config: null, diagnostics: [...new Set(errors)] };
   }
 
@@ -308,21 +252,6 @@ export function parseConfig(value: unknown): { config: FissionConfig | null; dia
       profiles: parsedProfiles,
       aliases,
       projectOverrides,
-      telemetry: {
-        enabled: telemetry.enabled as boolean,
-        file: telemetry.file as string,
-        maxEntries: telemetry.maxEntries as number,
-      },
-      tuning: {
-        enabled: tuning.enabled as boolean,
-        file: tuning.file as string,
-        maxEntries: tuning.maxEntries as number,
-        minEvidence: tuning.minEvidence as number,
-        maxFanout: tuning.maxFanout as number,
-        maxDepth: tuning.maxDepth as number,
-        maxRetries: tuning.maxRetries as number,
-        maxSwitches: tuning.maxSwitches as number,
-      },
     },
     diagnostics: [],
   };
@@ -348,8 +277,6 @@ export function createDefaultConfig(overrides: Partial<Record<CanonicalProfile, 
     profiles,
     aliases: { ...DEFAULT_ALIASES },
     projectOverrides: [],
-    telemetry: { ...DEFAULT_TELEMETRY },
-    tuning: { ...DEFAULT_TUNING },
   };
 }
 

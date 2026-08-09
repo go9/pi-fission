@@ -256,7 +256,7 @@ export async function probeAll(
 }
 
 /** Load the durable setup state. Missing file means setup is incomplete. */
-export async function loadSetupState(configPath: string, options: { fetch?: typeof fetch } = {}): Promise<SetupState> {
+export async function loadSetupState(configPath: string): Promise<SetupState> {
   const path = defaultSetupStatePath(configPath);
   try {
     const text = await readFile(path, "utf8");

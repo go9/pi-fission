@@ -35,22 +35,26 @@ describe("config diagnostics", () => {
     assert.equal(config.profiles.code.modelId, "fission-sidekick");
     assert.equal(config.profiles.design.modelId, "fission-design");
     assert.equal(config.mode, "shadow");
-    assert.equal(config.telemetry.enabled, false);
-    assert.equal(config.tuning.enabled, false);
   });
 
-  it("treats the telemetry and tuning sections as optional but still validates a written one", () => {
-    const raw = structuredClone(validConfig()) as unknown as Record<string, any>;
-    delete raw.telemetry;
-    delete raw.tuning;
-    const omitted = parseConfig(raw);
-    assert.deepEqual(omitted.diagnostics, [], "diagnostics-only sections must not make a routable config invalid");
-    assert.equal(omitted.config?.telemetry.enabled, false);
-    assert.equal(omitted.config?.tuning.maxSwitches, 4);
+  it("silently ignores leftover telemetry/tuning sections from configs written before 0.3.0", () => {
+    // Both sections were removed from the schema; a config file written against an older
+    // version still has them on disk, and must keep loading rather than erroring.
+    const withSections = structuredClone(validConfig()) as unknown as Record<string, any>;
+    withSections.telemetry = { enabled: true, file: "telemetry.jsonl", maxEntries: 200 };
+    withSections.tuning = { enabled: true, file: "tuning.jsonl", maxEntries: 200, minEvidence: 5, maxFanout: 4, maxDepth: 2, maxRetries: 3, maxSwitches: 4 };
+    const result = parseConfig(withSections);
+    assert.deepEqual(result.diagnostics, [], "dead sections must not make a routable config invalid");
+    assert.ok(result.config);
+    assert.ok(!("telemetry" in result.config!), "telemetry must not survive into the parsed config");
+    assert.ok(!("tuning" in result.config!), "tuning must not survive into the parsed config");
 
-    const typo = structuredClone(validConfig()) as unknown as Record<string, any>;
-    typo.telemetry.maxEntries = "lots";
-    assert.equal(parseConfig(typo).config, null, "a section you did write is still checked in full");
+    const malformed = structuredClone(validConfig()) as unknown as Record<string, any>;
+    malformed.tuning = "garbage";
+    malformed.telemetry = 42;
+    const malformedResult = parseConfig(malformed);
+    assert.deepEqual(malformedResult.diagnostics, [], "even a malformed dead section must not fail validation");
+    assert.ok(malformedResult.config);
   });
 
   it("malformed configuration is visible without echoing credentials", () => {

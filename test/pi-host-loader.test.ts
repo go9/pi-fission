@@ -26,7 +26,6 @@ describe("Pi host loader", () => {
     await writeFile(configPath, JSON.stringify(validConfig({
       mode: "off",
       provider: { ...base.provider, baseUrl: "http://127.0.0.1:1/v1", apiKey: undefined },
-      telemetry: { ...base.telemetry, enabled: false },
     })), "utf8");
 
     const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));

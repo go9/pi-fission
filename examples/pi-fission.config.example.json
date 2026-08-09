@@ -20,12 +20,7 @@
     "plan": "reason",
     "sidekick": "code",
     "explore": "fast",
-    "reviewer": "review",
-    "research": "research",
-    "vision": "vision",
-    "design": "design"
+    "reviewer": "review"
   },
-  "projectOverrides": [],
-  "telemetry": { "enabled": false, "file": "pi-fission.telemetry.jsonl", "maxEntries": 200 },
-  "tuning": { "enabled": false, "file": "pi-fission.tuning.jsonl", "maxEntries": 200, "minEvidence": 5, "maxFanout": 4, "maxDepth": 2, "maxRetries": 3, "maxSwitches": 4 }
+  "projectOverrides": []
 }

@@ -9,7 +9,7 @@ export const CANONICAL_PROFILES = [
 ] as const;
 
 export type CanonicalProfile = (typeof CANONICAL_PROFILES)[number];
-export type Phase = "clarify" | "explore" | "research" | "plan" | "plan-review" | "implement" | "review" | "regression" | "release" | "vision" | "unknown";
+export type Phase = "clarify" | "explore" | "research" | "plan" | "plan-review" | "implement" | "review" | "regression" | "release" | "vision" | "design" | "unknown";
 export type Complexity = "low" | "medium" | "high" | "unknown";
 export type Risk = "low" | "medium" | "high" | "protected" | "unknown";
 export type Mode = "off" | "shadow" | "active";

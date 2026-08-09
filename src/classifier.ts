@@ -12,9 +12,10 @@ const PROTECTED = /\b(auth(?:entication|orization)?|permission|secret|credential
 const REVIEW = /\b(review|audit|critique|regression|verify|validate|find bugs?|pull request|\bpr\b)\b/i;
 const RESEARCH = /\b(research|investigate|compare|upstream|documentation|docs|web|sources?|prior art)\b/i;
 const PLAN = /\b(plan|architect(?:ure)?|design|strategy|approach|trade-?offs?|proposal)\b/i;
+const DESIGN = /\b(design|mockup|wireframe|ui|ux|layout|prototype|interface)\b/i;
 const IMPLEMENT = /\b(implement|code|fix|bug|refactor|test|build|change|add|create|typescript|javascript|python|elixir)\b/i;
 const EXPLORE = /\b(explore|inspect|look at|find|locate|list|show|understand|summari[sz]e|quick|small)\b/i;
-const CLARIFY = /\b(clarify|explain (the|what|how|why)|what does|how does|why does|tell me about)\b/i;
+const CLARIFY = /\b(clarify|explain (the|what|how|why)|what does|how does|why does|tell me about|how (do|are|is|can|should|would|will) (i|we|you)|what (is|are|about)|whats|how can|how do|how are)\b/i;
 const MUTATION = /\b(implement|code|fix|bug|refactor|build|change|add|create|write|edit|update|remove|delete|migrate|commit|push|merge|deploy)\b/i;
 
 function requirements(overrides: Partial<Capabilities>): Capabilities {
@@ -47,7 +48,8 @@ export function classify(input: ClassifierInput): Classification {
   const intent = mutationIntentOf(text);
 
   if ((input.imageCount ?? 0) > 0 || /\b(image|screenshot|diagram|photo|visual|vision)\b/i.test(text)) {
-    return result("vision", "medium", PROTECTED.test(text) ? "protected" : "medium", 0.98, ["input.image"], requirements({
+    const phase: Phase = DESIGN.test(text) ? "design" : "vision";
+    return result(phase, "medium", PROTECTED.test(text) ? "protected" : "medium", 0.98, [`input.image`, `phase.${phase}`], requirements({
       tools: true,
       reasoning: true,
       image: true,

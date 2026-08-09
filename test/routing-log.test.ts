@@ -81,10 +81,10 @@ describe("routing log", () => {
     assert.equal(scoped.some((s) => s.sessionId === "child"), true);
     assert.equal(scoped.some((s) => s.agent === "reviewer"), true);
     const collapsed = widgetRows(scoped, "main", false);
-    assert.equal(collapsed[0], "fission: 2 agents routing · ctrl+alt+f for details");
+    assert.equal(collapsed[0], "fission: 2 agents routing · main fission-sidekick · ctrl+e for details");
     const expanded = widgetRows(scoped, "main", true);
-    assert.ok(expanded.some((row) => /main\s+fission-sidekick · writing code \(code\)/.test(row)));
-    assert.ok(expanded.some((row) => /reviewer\s+fission-reviewer · reviewing the work \(review\)/.test(row)));
+    assert.ok(expanded.some((row) => /main · fission-sidekick · writing code/.test(row)));
+    assert.ok(expanded.some((row) => /reviewer · fission-reviewer · reviewing the work/.test(row)));
     assert.doesNotMatch(expanded.join("\n"), /secret|prompt text/i);
     assert.match(formatAgents(scoped, "main"), /reviewer — fission-reviewer · reviewing the work \(review\)/);
     await rm(dir, { recursive: true, force: true });

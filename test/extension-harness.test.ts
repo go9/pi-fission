@@ -328,7 +328,7 @@ describe("router-only Pi Fission extension", () => {
     try {
       await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       await emit(runtime, context, "session_start", {});
-      assert.ok(runtime.shortcuts.has("ctrl+alt+f"), "toggle shortcut registered");
+      assert.ok(runtime.shortcuts.has("ctrl+e"), "toggle shortcut registered");
       assert.ok(notifications.some((line) => line.startsWith("widget:pi-fission-agents:")), JSON.stringify(notifications));
       assert.ok(notifications.some((line) => /0 agents routing/.test(line)));
     } finally {
@@ -346,8 +346,8 @@ describe("router-only Pi Fission extension", () => {
       await emit(runtime, context, "session_start", {});
       const before = notifications.filter((line) => line.startsWith("widget:pi-fission-agents:")).length;
       // Toggle collapses and expands; each toggle must re-render the view regardless of log state.
-      await runtime.shortcuts.get("ctrl+alt+f")!.handler(context);
-      await runtime.shortcuts.get("ctrl+alt+f")!.handler(context);
+      await runtime.shortcuts.get("ctrl+e")!.handler(context);
+      await runtime.shortcuts.get("ctrl+e")!.handler(context);
       const after = notifications.filter((line) => line.startsWith("widget:pi-fission-agents:")).length;
       assert.equal(after, before + 2, "each toggle re-renders the widget");
     } finally {
@@ -365,10 +365,10 @@ describe("router-only Pi Fission extension", () => {
       await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       await emit(runtime, context, "session_start", {});
       await emit(runtime, context, "before_agent_start", { prompt: "Implement a TypeScript helper", images: [] });
-      await runtime.shortcuts.get("ctrl+alt+f")!.handler(context);
+      await runtime.shortcuts.get("ctrl+e")!.handler(context);
       const expanded = notifications.filter((line) => line.startsWith("widget:pi-fission-agents:")).at(-1);
       assert.ok(expanded && /fission workers \(1\)/.test(expanded), JSON.stringify(expanded));
-      assert.ok(expanded && /main\s+fission-sidekick · writing code/.test(expanded), JSON.stringify(expanded));
+      assert.ok(expanded && /main · fission-sidekick · writing code/.test(expanded), JSON.stringify(expanded));
     } finally {
       await saved.mock.close();
     }

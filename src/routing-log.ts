@@ -35,6 +35,7 @@ const PHASE_PHRASE: Record<Phase, string> = {
   regression: "running regression checks",
   release: "preparing release",
   vision: "analyzing images",
+  design: "reviewing the design",
   unknown: "classifying the request",
 };
 
@@ -158,13 +159,15 @@ function sessionLabel(summary: SessionSummary, mainSessionId: string): string {
 export function widgetRows(summaries: SessionSummary[], mainSessionId: string, expanded: boolean): string[] {
   const count = summaries.length;
   if (!expanded) {
-    return [`fission: ${count} agent${count === 1 ? "" : "s"} routing · ctrl+alt+f for details`];
+    const main = summaries.find((summary) => sessionLabel(summary, mainSessionId) === "main");
+    const mainModel = main?.currentModel ? ` · main ${main.currentModel}` : "";
+    return [`fission: ${count} agent${count === 1 ? "" : "s"} routing${mainModel} · ctrl+e for details`];
   }
-  const rows: string[] = [`fission workers (${count}) · ctrl+alt+f to collapse`];
+  const rows: string[] = [`fission workers (${count}) · ctrl+e to collapse`];
   if (count === 0) rows.push("  (no active sessions in the last 15 minutes)");
   for (const summary of summaries) {
     const model = summary.currentModel ?? "unknown";
-    rows.push(`  ${sessionLabel(summary, mainSessionId).padEnd(18)} ${model} · ${summary.reason}${summary.profile ? ` (${summary.profile})` : ""}`);
+    rows.push(`  ${sessionLabel(summary, mainSessionId)} · ${model} · ${summary.reason}`);
   }
   return rows;
 }

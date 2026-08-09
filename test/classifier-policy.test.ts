@@ -50,6 +50,28 @@ describe("deterministic classifier and policy", () => {
     assert.equal(classification.mutationIntent, "mutation");
   });
 
+  it("mutation-intent phrasing routes to implement, not clarify or explore", () => {
+    const prompts = [
+      "How do I fix this bug in the login form?",
+      "How can we add pagination to the table?",
+      "What is the best way to refactor this module?",
+      "quick fix for the crash in the parser",
+      "make a small change to fix the bug",
+      "find and fix the memory leak",
+    ];
+    for (const text of prompts) {
+      const classification = classify({ text });
+      assert.equal(classification.phase, "implement", `"${text}" should classify as implement, got ${classification.phase}`);
+      assert.equal(classification.mutationIntent, "mutation");
+    }
+  });
+
+  it("genuine clarifying questions without mutation verbs still route to clarify", () => {
+    const classification = classify({ text: "How do I use this API?" });
+    assert.equal(classification.phase, "clarify");
+    assert.equal(classification.mutationIntent, "read-only");
+  });
+
   it("tool observations merge requirements monotonically and preserve protected risk", () => {
     const protectedVision = classify({
       text: "Review this authentication screenshot with structured validation",
@@ -91,5 +113,21 @@ describe("capability policy", () => {
     const route = recommend({ classification, config, resolvedModels: allModels, providerReady: true });
     const fast = route.evaluations.find((item) => item.profile === "fast");
     assert.deepEqual(fast?.reasons, ["capability.reasoning", "capability.structured-output", "capability.context-window"]);
+  });
+});
+
+describe("design phase", () => {
+  it("design-flavored image prompts route to the design profile, not generic vision", () => {
+    const classification = classify({ text: "Design a mockup for the settings screen", imageCount: 1 });
+    assert.equal(classification.phase, "design");
+    const route = recommend({ classification, config: validConfig(), resolvedModels: allModels, providerReady: true });
+    assert.equal(route.profile, "design");
+  });
+
+  it("generic image prompts without design language still route to vision", () => {
+    const classification = classify({ text: "check this screenshot for a rendering bug", imageCount: 1 });
+    assert.equal(classification.phase, "vision");
+    const route = recommend({ classification, config: validConfig(), resolvedModels: allModels, providerReady: true });
+    assert.equal(route.profile, "vision");
   });
 });

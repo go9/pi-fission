@@ -57,13 +57,13 @@ Low-confidence, unavailable, manually overridden, setup-blocked, and restoration
 The Pi TUI shows a live **fission agents widget** above the editor:
 
 ```text
-fission: 3 agents routing · ctrl+alt+f for details
+fission: 3 agents routing · ctrl+e for details
 ```
 
-Press **ctrl+alt+f** to expand it into per-agent rows, updating live every ~2 seconds:
+Press **ctrl+e** to expand it into per-agent rows, updating live every ~2 seconds:
 
 ```text
-fission workers (3) · ctrl+alt+f to collapse
+fission workers (3) · ctrl+e to collapse
   main              fission-sidekick · writing code (code)
   reviewer          fission-reviewer · reviewing the work (review)
   sub 3f1a9c2b      fission-explore · exploring the codebase (fast)

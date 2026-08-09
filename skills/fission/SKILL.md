@@ -41,7 +41,7 @@ fission: active · implement → code · fission-sidekick
 
 ## Live widget
 
-In the TUI, a widget above the editor shows the agent count. Press **ctrl+alt+f** to expand per-agent rows (main + subagents): current model and why it switched, updating every few seconds.
+In the TUI, a widget above the editor shows the agent count. Press **ctrl+e** to expand per-agent rows (main + subagents): current model and why it switched, updating every few seconds.
 
 ## Modes
 

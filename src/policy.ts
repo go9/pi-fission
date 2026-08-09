@@ -18,6 +18,7 @@ const PHASE_PREFERENCE: Record<Classification["phase"], CanonicalProfile> = {
   regression: "review",
   release: "reason",
   vision: "vision",
+  design: "design",
   unknown: "fast",
 };
 

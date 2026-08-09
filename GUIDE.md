@@ -44,12 +44,12 @@ Setup re-runs all seven probes and returns to active mode only if every profile 
 
 ## Live agents widget
 
-In the TUI, a widget above the editor shows how many Fission agents are active. Press **ctrl+alt+f** to expand it; rows update every ~2 seconds with each agent's current model and why it switched:
+In the TUI, a widget above the editor shows how many Fission agents are active. Press **ctrl+e** to expand it; rows update every ~2 seconds with each agent's current model and why it switched:
 
 ```text
-fission: 2 agents routing · ctrl+alt+f for details   (collapsed)
+fission: 2 agents routing · ctrl+e for details   (collapsed)
 
-fission workers (2) · ctrl+alt+f to collapse
+fission workers (2) · ctrl+e to collapse
   main        fission-sidekick · writing code
   reviewer    fission-reviewer · reviewing the work
 ```

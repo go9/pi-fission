@@ -717,7 +717,8 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     },
   });
   if (typeof pi.registerShortcut === "function") {
-    pi.registerShortcut(Key.ctrlAlt("f"), {
+    // plain ctrl+e: terminal eats alt on ctrl+alt combos, and ctrl+o is pi's builtin tool-expand.
+    pi.registerShortcut(Key.ctrl("e"), {
       description: "Toggle the live Pi Fission agents widget",
       handler: (ctx) => toggleWidget(ctx),
     });

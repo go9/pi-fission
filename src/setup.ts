@@ -6,14 +6,6 @@ import { DEFAULT_PROFILE_CAPABILITIES, defaultSetupStatePath, isLoopbackUrl, res
 
 export type { ProbeResult, SetupState };
 
-export interface DiscoveredModel {
-  id: string;
-  name: string;
-  capabilities: Partial<Record<CapabilityKey, boolean>>;
-}
-
-type CapabilityKey = "tools" | "reasoning" | "image" | "structuredOutput";
-
 export interface SetupDiagnostic {
   profile: CanonicalProfile;
   target: string;

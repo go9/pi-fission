@@ -11,15 +11,15 @@ import {
   type ProjectOverride,
 } from "./types.ts";
 
+/** Only the aliases that differ from the canonical name. `resolveProfiles` already
+ *  tries the profile's own name as a candidate, so `research: "research"` and its
+ *  two siblings were pure no-ops. */
 const DEFAULT_ALIASES: Record<string, CanonicalProfile> = {
   plan: "reason",
   sidekick: "code",
   explore: "fast",
   "small-model": "fast",
   reviewer: "review",
-  research: "research",
-  vision: "vision",
-  design: "design",
 };
 
 /** Migration from 0.1 canonical ids (pi-*) to the full-product ids. */
@@ -52,6 +52,21 @@ export const DEFAULT_PROFILE_CAPABILITIES: Record<CanonicalProfile, Capabilities
   design: { tools: true, reasoning: true, image: true, structuredOutput: false, contextWindow: 128_000 },
 };
 
+/** Both sections are optional in a hand-written config: they are diagnostics knobs,
+ *  and demanding all eleven keys made a perfectly routable config invalid. Omitting
+ *  either one means "off with conventional filenames", never a parse error. */
+const DEFAULT_TELEMETRY = { enabled: false, file: "pi-fission.telemetry.jsonl", maxEntries: 200 } as const;
+const DEFAULT_TUNING = {
+  enabled: false,
+  file: "pi-fission.tuning.jsonl",
+  maxEntries: 200,
+  minEvidence: 5,
+  maxFanout: 4,
+  maxDepth: 2,
+  maxRetries: 3,
+  maxSwitches: 4,
+} as const;
+
 export type ConfigResult =
   | { status: "ready"; path: string; config: FissionConfig; diagnostics: [] }
   | { status: "unconfigured" | "invalid-config"; path: string; config: null; diagnostics: string[] };
@@ -74,6 +89,10 @@ function parseCapabilities(value: unknown, path: string, errors: string[]): Capa
     errors.push(`${path} must be an object`);
     return null;
   }
+  // Count what this call adds rather than string-matching the shared error list:
+  // prefix matching is O(errors) per profile and would misfire on any future path
+  // that starts with this one.
+  const before = errors.length;
   const booleanKeys = ["tools", "reasoning", "image", "structuredOutput"] as const;
   for (const key of booleanKeys) {
     if (typeof value[key] !== "boolean") errors.push(`${path}.${key} must be a boolean`);
@@ -81,7 +100,7 @@ function parseCapabilities(value: unknown, path: string, errors: string[]): Capa
   if (!Number.isInteger(value.contextWindow) || (value.contextWindow as number) < 1) {
     errors.push(`${path}.contextWindow must be a positive integer`);
   }
-  if (errors.some((error) => error.startsWith(`${path}.`) || error === `${path} must be an object`)) return null;
+  if (errors.length > before) return null;
   return {
     tools: value.tools as boolean,
     reasoning: value.reasoning as boolean,
@@ -238,7 +257,9 @@ export function parseConfig(value: unknown): { config: FissionConfig | null; dia
     }
   }
 
-  const telemetry = raw.telemetry;
+  // An omitted section takes the defaults; a present one is still validated in full,
+  // because a typo in a section you did write is a mistake worth reporting.
+  const telemetry = raw.telemetry === undefined ? { ...DEFAULT_TELEMETRY } : raw.telemetry;
   if (!isRecord(telemetry)) {
     errors.push("telemetry must be an object");
   } else {
@@ -251,7 +272,7 @@ export function parseConfig(value: unknown): { config: FissionConfig | null; dia
     }
   }
 
-  const tuning = raw.tuning ?? {};
+  const tuning = raw.tuning === undefined ? { ...DEFAULT_TUNING } : raw.tuning;
   if (!isRecord(tuning)) {
     errors.push("tuning must be an object");
   } else {
@@ -320,17 +341,8 @@ export function createDefaultConfig(overrides: Partial<Record<CanonicalProfile, 
     profiles,
     aliases: { ...DEFAULT_ALIASES },
     projectOverrides: [],
-    telemetry: { enabled: false, file: "pi-fission.telemetry.jsonl", maxEntries: 200 },
-    tuning: {
-      enabled: false,
-      file: "pi-fission.tuning.jsonl",
-      maxEntries: 200,
-      minEvidence: 5,
-      maxFanout: 4,
-      maxDepth: 2,
-      maxRetries: 3,
-      maxSwitches: 4,
-    },
+    telemetry: { ...DEFAULT_TELEMETRY },
+    tuning: { ...DEFAULT_TUNING },
   };
 }
 
@@ -341,14 +353,6 @@ export function defaultConfigPath(env: NodeJS.ProcessEnv = process.env): string 
 
 export function defaultSetupStatePath(configPath: string): string {
   return join(dirname(configPath), "pi-fission.setup.json");
-}
-
-export function defaultTuningPath(configPath: string): string {
-  return join(dirname(configPath), "pi-fission.tuning.jsonl");
-}
-
-export function telemetryPath(configPath: string, config: FissionConfig): string {
-  return join(dirname(configPath), config.telemetry.file);
 }
 
 /** Effective profile target for a repository, applying project overrides.

@@ -87,7 +87,3 @@ export function formatSetup(view: FissionView): string {
   return `fission setup: complete · 7/7 profiles · ${view.config.config.mode} · ${view.setup.lastProbedAt ?? "unknown time"}`;
 }
 
-export function formatProbeResult(probe: ProbeResult | undefined, profile: string): string {
-  if (!probe) return `${profile}: unprobed`;
-  return `${profile}: ${probe.ok ? "ok" : "FAIL"} · ${probe.modelId}${probe.error ? ` · ${probe.error}` : ""}${probe.latencyMs !== undefined ? ` · ${probe.latencyMs}ms` : ""}`;
-}

@@ -39,6 +39,20 @@ describe("config diagnostics", () => {
     assert.equal(config.tuning.enabled, false);
   });
 
+  it("treats the telemetry and tuning sections as optional but still validates a written one", () => {
+    const raw = structuredClone(validConfig()) as unknown as Record<string, any>;
+    delete raw.telemetry;
+    delete raw.tuning;
+    const omitted = parseConfig(raw);
+    assert.deepEqual(omitted.diagnostics, [], "diagnostics-only sections must not make a routable config invalid");
+    assert.equal(omitted.config?.telemetry.enabled, false);
+    assert.equal(omitted.config?.tuning.maxSwitches, 4);
+
+    const typo = structuredClone(validConfig()) as unknown as Record<string, any>;
+    typo.telemetry.maxEntries = "lots";
+    assert.equal(parseConfig(typo).config, null, "a section you did write is still checked in full");
+  });
+
   it("malformed configuration is visible without echoing credentials", () => {
     const raw = structuredClone(validConfig()) as unknown as Record<string, any>;
     raw.provider.apiKey = "super-secret-value";

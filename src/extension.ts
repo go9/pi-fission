@@ -218,7 +218,13 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
   /** Whether a real user prompt has begun; selections before that are startup defaults, not overrides. */
   let promptSeen = false;
 
+  /** The same value `state.activeModel` renders, kept structured. The view wants a string;
+   *  the thinking-level bookkeeping wants the parts, and re-splitting the rendered string
+   *  to recover them guesses at a boundary we already knew. */
+  let activeModelIdentity: ModelIdentity | null = null;
+
   const setActiveModel = (identity: ModelIdentity | null): void => {
+    activeModelIdentity = identity;
     state.activeModel = displayModel(identity);
   };
 
@@ -612,8 +618,7 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
   });
 
   pi.on("thinking_level_select", (event) => {
-    const current = state.activeModel?.split("/");
-    const currentModel = current && current.length > 1 ? { provider: current[0]!, id: current.slice(1).join("/") } : null;
+    const currentModel = activeModelIdentity;
     const expectedTargetIsCurrent = expectedInternalSelection !== null
       && currentModel?.provider === expectedInternalSelection.provider
       && currentModel.id === expectedInternalSelection.id;

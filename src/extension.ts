@@ -438,6 +438,8 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     resetSession(route);
     state.routingStatus = "idle";
     state.routingReason = null;
+    // Phase continuity is session-scoped: a new session is not a follow-up.
+    state.classification = null;
     state.sessionId = getSessionId(ctx);
     setActiveModel(modelIdentity(ctx));
     updateFooter(state, ctx);
@@ -466,7 +468,11 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     ensureDiscovery();
     const previousModel = modelIdentity(ctx);
     setActiveModel(previousModel);
-    state.classification = classify({ text: event.prompt, imageCount: event.images?.length ?? 0 });
+    state.classification = classify({
+      text: event.prompt,
+      imageCount: event.images?.length ?? 0,
+      previous: state.classification,
+    });
     state.routingReason = null;
     reroute(ctx);
 

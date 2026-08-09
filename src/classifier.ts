@@ -45,9 +45,20 @@ function result(
   return { phase, complexity, risk, confidence, reasonCodes, requiredCapabilities, mutationIntent };
 }
 
+/** Confidence carried by a turn that was classified only by what came before it.
+ *  Below every direct pattern match (the weakest is CLARIFY at 0.8) so an inherited
+ *  phase never outranks an observed one, and above the policy floor of 0.5 so an
+ *  ordinary follow-up still routes. */
+const CONTINUATION_CONFIDENCE = 0.7;
+
 export interface ClassifierInput {
   text?: string;
   imageCount?: number;
+  /** The previous turn's classification in this session, if any. An agentic session is
+   *  a conversation: "ok do that", "now the other one" and "why?" carry no phase
+   *  vocabulary of their own, and treating each as a cold start throws away the only
+   *  signal available. Must be cleared when the session resets. */
+  previous?: Classification | null;
 }
 
 export function classify(input: ClassifierInput): Classification {
@@ -123,6 +134,23 @@ export function classify(input: ClassifierInput): Classification {
   }
   if (CLARIFY.test(text)) {
     return result("clarify", "low", "low", 0.8, ["phase.clarify"], requirements({ contextWindow: 32_000 }), intent);
+  }
+
+  // Nothing in this turn names a phase. If the session already established one, the
+  // turn is a follow-up within that work, which is a far better answer than "unknown".
+  // Inherit the whole shape — capabilities and mutation intent included — because a
+  // prompt with no phase vocabulary has no capability or intent signal either.
+  const previous = input.previous;
+  if (text && previous && previous.phase !== "unknown") {
+    return result(
+      previous.phase,
+      previous.complexity,
+      previous.risk,
+      Math.min(previous.confidence, CONTINUATION_CONFIDENCE),
+      ["input.ambiguous", "phase.continued", `phase.${previous.phase}`],
+      previous.requiredCapabilities,
+      previous.mutationIntent,
+    );
   }
 
   return result("unknown", "unknown", "unknown", 0.25, [text ? "input.ambiguous" : "input.empty"], requirements({}), intent);

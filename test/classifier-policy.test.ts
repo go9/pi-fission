@@ -152,4 +152,61 @@ describe("design phase", () => {
     assert.equal(classify({ text: "Design an architecture plan and trade-offs" }).phase, "plan");
     assert.equal(classify({ text: "Implement the new settings screen layout" }).phase, "implement");
   });
+
+  describe("phase continuity across a session", () => {
+    const previous = classify({ text: "Implement a TypeScript helper and tests" });
+
+    it("a follow-up with no phase vocabulary continues the established phase and still routes", () => {
+      for (const text of ["ok do that", "now the other one", "yes please", "same for the second file"]) {
+        const classification = classify({ text, previous });
+        assert.equal(classification.phase, "implement", text);
+        assert.ok(classification.reasonCodes.includes("phase.continued"), text);
+        const route = recommend({ classification, config: validConfig(), resolvedModels: allModels, providerReady: true });
+        assert.equal(route.profile, "code", text);
+      }
+    });
+
+    it("a continued turn inherits capabilities and mutation intent, not just the phase name", () => {
+      const classification = classify({ text: "ok do that", previous });
+      assert.equal(classification.mutationIntent, previous.mutationIntent);
+      assert.deepEqual(classification.requiredCapabilities, previous.requiredCapabilities);
+      assert.equal(classification.risk, previous.risk);
+    });
+
+    it("an inherited phase never outranks an observed one", () => {
+      const continued = classify({ text: "ok do that", previous });
+      assert.ok(continued.confidence < previous.confidence);
+      // The weakest direct match must still beat a continuation.
+      const weakestDirect = classify({ text: "what is this" });
+      assert.equal(weakestDirect.phase, "clarify");
+      assert.ok(continued.confidence < weakestDirect.confidence);
+    });
+
+    it("a follow-up that names its own phase is classified on its own terms", () => {
+      const classification = classify({ text: "now review this pull request", previous });
+      assert.equal(classification.phase, "review");
+      assert.ok(!classification.reasonCodes.includes("phase.continued"));
+    });
+
+    it("continuity does not manufacture a phase out of nothing", () => {
+      assert.equal(classify({ text: "perhaps something" }).phase, "unknown");
+      const unknownPrevious = classify({ text: "perhaps something" });
+      const afterUnknown = classify({ text: "ok do that", previous: unknownPrevious });
+      assert.equal(afterUnknown.phase, "unknown");
+      // The log must not claim a phase was continued when none was ever established.
+      assert.ok(!afterUnknown.reasonCodes.includes("phase.continued"));
+      assert.equal(classify({ text: "", previous }).phase, "unknown");
+      assert.ok(classify({ text: "", previous }).reasonCodes.includes("input.empty"));
+    });
+
+    it("a chain of follow-ups stays pinned to the established phase without drifting up", () => {
+      let current = previous;
+      for (let turn = 0; turn < 5; turn += 1) {
+        current = classify({ text: "keep going", previous: current });
+        assert.equal(current.phase, "implement");
+      }
+      const oneStep = classify({ text: "keep going", previous });
+      assert.equal(current.confidence, oneStep.confidence, "confidence must not drift over a chain");
+    });
+  });
 });

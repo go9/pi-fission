@@ -271,11 +271,50 @@ describe("router-only Pi Fission extension", () => {
       const entries = JSON.parse(await readFile(join(saved.dir, "pi-fission.routing.jsonl"), "utf8"));
       assert.equal(entries.kind, "route");
       assert.equal(entries.profile, "code");
-      assert.equal(entries.toModel, saved.config.profiles.code.modelId);
+      assert.equal(entries.toModel, `9router/${saved.config.profiles.code.modelId}`, "both models are provider-qualified so they compare");
+      assert.equal(entries.fromModel, "existing/original");
       assert.equal(entries.switched, true);
       assert.equal(entries.reason, "writing code");
       assert.ok(entries.sessionId.length > 0);
       assert.doesNotMatch(JSON.stringify(entries), /Implement a TypeScript helper/);
+    } finally {
+      await saved.mock.close();
+    }
+  });
+
+  it("does not report a switch when the session is already on the routed group", async () => {
+    const saved = await fixture();
+    const runtime = fakeApi();
+    // The current model IS the recommended target, so nothing actually moves.
+    const target = { provider: "9router", id: saved.config.profiles.code.modelId };
+    const context = fakeContext(tmpdir(), [], target, [target]);
+    try {
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await emit(runtime, context, "before_agent_start", { prompt: "Implement a TypeScript helper", images: [] });
+      const entry = JSON.parse(await readFile(join(saved.dir, "pi-fission.routing.jsonl"), "utf8"));
+      assert.equal(entry.kind, "route");
+      assert.equal(entry.fromModel, entry.toModel);
+      assert.equal(entry.switched, false, "no model change occurred");
+      assert.equal(runtime.selectionCalls.length, 0, "and no selection was issued");
+    } finally {
+      await saved.mock.close();
+    }
+  });
+
+  it("records shadow-mode decisions without switching the model", async () => {
+    const saved = await fixture("shadow");
+    const runtime = fakeApi();
+    const target = { provider: "9router", id: saved.config.profiles.code.modelId };
+    const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target]);
+    try {
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await emit(runtime, context, "before_agent_start", { prompt: "Implement a TypeScript helper", images: [] });
+      assert.equal(runtime.selectionCalls.length, 0, "shadow mode never switches");
+      const entry = JSON.parse(await readFile(join(saved.dir, "pi-fission.routing.jsonl"), "utf8"));
+      assert.equal(entry.kind, "shadow");
+      assert.equal(entry.switched, false);
+      assert.equal(entry.toModel, `9router/${saved.config.profiles.code.modelId}`, "records what it would have picked");
+      assert.match(entry.reason, /would route/);
     } finally {
       await saved.mock.close();
     }

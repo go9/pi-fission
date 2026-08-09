@@ -105,6 +105,18 @@ describe("routing log", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  it("truncates the rendered history and says how much it dropped", () => {
+    const entries = Array.from({ length: 14 }, (_, index) => baseEntry({
+      sessionId: `session-${index}`,
+      ts: `2026-08-07T10:${String(index).padStart(2, "0")}:00.000Z`,
+    }));
+    const rendered = formatRoutingLog(entries);
+    const sessionLines = rendered.split("\n").filter((line) => line.startsWith("  session "));
+    assert.equal(sessionLines.length, 10, "renders at most ten sessions");
+    assert.ok(sessionLines[0]?.includes("session-13"), "most recent session first");
+    assert.match(rendered, /\(4 older sessions not shown\)/, "truncation is stated, never silent");
+  });
+
   it("maps human reasons per routing kind", () => {
     assert.equal(describeRouting("route", "explore", []), "exploring the codebase");
     assert.equal(describeRouting("route", "implement", []), "writing code");

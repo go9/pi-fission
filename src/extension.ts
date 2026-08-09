@@ -370,14 +370,18 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
   };
 
   const recordRouting = async (ctx: ExtensionContext, previousModel: ModelIdentity | null): Promise<void> => {
-    if (state.config.status !== "ready" || state.config.config.mode !== "active") return;
+    if (state.config.status !== "ready" || state.config.config.mode === "off") return;
     const kind: RoutingLogEntry["kind"] =
-      state.routingStatus === "routed" ? "route"
+      state.config.config.mode === "shadow" ? "shadow"
+      : state.routingStatus === "routed" ? "route"
       : state.routingStatus === "manual" ? "manual"
       : state.routingStatus === "restore-failed" ? "restore-failed"
       : "retained";
-    const toModel = state.recommendation?.modelId ?? null;
-    const fromModel = previousModel ? `${previousModel.provider}/${previousModel.id}` : state.activeModel;
+    // Both sides are provider-qualified so `switched` compares like with like. Comparing a
+    // bare group id against `provider/id` made every route report a switch that never happened.
+    const recommended = state.recommendation?.modelId ?? null;
+    const toModel = recommended ? displayModel({ provider: state.config.config.provider.id, id: recommended }) : null;
+    const fromModel = previousModel ? displayModel(previousModel) : state.activeModel;
     const entry: RoutingLogEntry = {
       version: 1,
       ts: new Date().toISOString(),

@@ -413,6 +413,44 @@ describe("router-only Pi Fission extension", () => {
     }
   });
 
+  it("routes through a project override when the session cwd matches", async () => {
+    const mock = await listen((request, response) => {
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/v1/models") {
+        response.end(JSON.stringify({ data: [
+          ...CANONICAL_PROFILES.map((profile) => ({ id: validConfig().profiles[profile].modelId })),
+          { id: "repo-specific-code" },
+        ] }));
+        return;
+      }
+      response.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
+    });
+    const base = validConfig();
+    const config = validConfig({
+      mode: "active",
+      provider: { ...base.provider, baseUrl: mock.baseUrl },
+      projectOverrides: [{ repo: "/repo-with-override", profiles: { code: "repo-specific-code" } }],
+    });
+    const saved = await writeConfig(config);
+    await writeFile(join(saved.dir, "pi-fission.setup.json"), JSON.stringify(completeSetup(config)), "utf8");
+    const runtime = fakeApi();
+    const overridden = { provider: "9router", id: "repo-specific-code" };
+    const standard = { provider: "9router", id: config.profiles.code.modelId };
+    try {
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      const matching = fakeContext("/repo-with-override", [], { provider: "existing", id: "original" }, [overridden, standard]);
+      await emit(runtime, matching, "before_agent_start", { prompt: "Implement a TypeScript helper", images: [] });
+      assert.deepEqual(runtime.selectionCalls.at(-1), overridden, "the override applies in its own repo");
+      await emit(runtime, matching, "agent_settled", {});
+
+      const other = fakeContext("/some-other-repo", [], { provider: "existing", id: "original" }, [overridden, standard]);
+      await emit(runtime, other, "before_agent_start", { prompt: "Implement a TypeScript helper", images: [] });
+      assert.deepEqual(runtime.selectionCalls.at(-1), standard, "and nowhere else");
+    } finally {
+      await mock.close();
+    }
+  });
+
   it("parses mode arguments without exposing workflow state", async () => {
     const saved = await fixture();
     const runtime = fakeApi();

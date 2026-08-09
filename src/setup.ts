@@ -162,11 +162,14 @@ export async function runProbe(
 
   const parsed = parseProbePayload(payload);
   const text = parsed.text ?? "";
+  // "OK", "ok", "OK." and "Ok!" all mean the group answered. Demanding the exact bytes
+  // failed usable models and blocked active mode for all seven profiles.
+  const acknowledged = /^ok[.!]?$/i.test(text.trim());
   return {
     profile,
     modelId: target,
-    ok: text === "OK",
-    error: text === "OK" ? undefined : parsed.error ?? `unexpected probe text: ${text.slice(0, 40)}`,
+    ok: acknowledged,
+    error: acknowledged ? undefined : parsed.error ?? `unexpected probe text: ${text.slice(0, 40)}`,
     latencyMs: Date.now() - startedAt,
     keyless: loopback && apiKey === null,
     probedAt: now().toISOString(),
@@ -178,13 +181,15 @@ export async function probeAll(
   config: FissionConfig,
   options: SetupProbeOptions = {},
 ): Promise<{ probes: Partial<Record<CanonicalProfile, ProbeResult>>; complete: boolean; failures: CanonicalProfile[] }> {
+  // Concurrently: sequentially this was seven timeouts deep, so a stalled 9Router blocked
+  // /fission-setup for up to 105s instead of one probe timeout.
+  const results = await Promise.all(CANONICAL_PROFILES.map((profile) =>
+    runProbe(config, profile, config.profiles[profile].modelId, options)));
   const probes: Partial<Record<CanonicalProfile, ProbeResult>> = {};
   const failures: CanonicalProfile[] = [];
-  for (const profile of CANONICAL_PROFILES) {
-    const target = config.profiles[profile].modelId;
-    const result = await runProbe(config, profile, target, options);
-    probes[profile] = result;
-    if (!result.ok) failures.push(profile);
+  for (const result of results) {
+    probes[result.profile] = result;
+    if (!result.ok) failures.push(result.profile);
   }
   return { probes, complete: failures.length === 0, failures };
 }

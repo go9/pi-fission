@@ -117,6 +117,39 @@ describe("9Router discovery integration", () => {
     }
   });
 
+  it("skips unreadable catalogue entries instead of discarding the catalogue", async () => {
+    const mock = await listen((_request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ data: [
+        { id: "fast" }, { id: "code" }, { id: "plan" }, { id: "review" },
+        { name: "a group this version cannot parse" },
+        { id: "research" }, { id: "vision" }, { id: "design" },
+      ] }));
+    });
+    try {
+      const result = await discoverModels(validConfig({ provider: { ...validConfig().provider, baseUrl: mock.baseUrl } }), { env });
+      assert.equal(result.status, "ready", "one bad entry must not disable routing for the session");
+      assert.equal(result.models.length, 7);
+      assert.match(result.diagnostic, /skipped 1 unreadable entry/);
+      assert.equal(result.resolvedProfiles["reason"], "plan");
+    } finally {
+      await mock.close();
+    }
+  });
+
+  it("reports an empty catalogue when no entry is readable", async () => {
+    const mock = await listen((_request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ data: [{ name: "nope" }, { id: "" }] }));
+    });
+    try {
+      const result = await discoverModels(validConfig({ provider: { ...validConfig().provider, baseUrl: mock.baseUrl } }), { env });
+      assert.equal(result.status, "empty");
+    } finally {
+      await mock.close();
+    }
+  });
+
   it("9Router discovery reports a malformed response", async () => {
     const mock = await listen((_request, response) => {
       response.setHeader("content-type", "application/json");

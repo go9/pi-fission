@@ -103,6 +103,35 @@ describe("setup diagnostics and probes", () => {
     assert.equal(authorization, undefined, "keyless loopback sends no Authorization");
   });
 
+  it("accepts conventional OK acknowledgements and still rejects real answers", async () => {
+    const config = validConfig({ provider: { ...validConfig().provider, baseUrl: "http://127.0.0.1:20128/v1", apiKey: undefined } });
+    const probeWith = async (text: string) => runProbe(config, "code", "fission-sidekick", {
+      fetch: (async () => new Response(chatCompletion(text), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch,
+      env: {},
+    });
+    for (const text of ["OK", "ok", "OK.", "Ok!", " OK "]) {
+      assert.equal((await probeWith(text)).ok, true, `"${text}" acknowledges the probe`);
+    }
+    for (const text of ["I will help", "OK, here is what I found", ""]) {
+      assert.equal((await probeWith(text)).ok, false, `"${text}" is not an acknowledgement`);
+    }
+  });
+
+  it("probes all seven profiles concurrently", async () => {
+    const config = validConfig({ provider: { ...validConfig().provider, baseUrl: "http://127.0.0.1:20128/v1", apiKey: undefined } });
+    let inFlight = 0;
+    let peak = 0;
+    const fetchImpl = async (): Promise<Response> => {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight--;
+      return new Response(chatCompletion("OK"), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const { complete } = await probeAll(config, { fetch: fetchImpl as unknown as typeof fetch, env: {} });
+    assert.equal(complete, true);
+    assert.equal(peak, 7, "a stalled router must cost one probe timeout, not seven");
+  });
+
   it("probeAll gates active readiness on all seven profiles", async () => {
     const config = validConfig({ provider: { ...validConfig().provider, baseUrl: "http://127.0.0.1:20128/v1", apiKey: undefined } });
     const fetchImpl = async (): Promise<Response> => new Response(chatCompletion("OK"), { status: 200, headers: { "content-type": "application/json" } });

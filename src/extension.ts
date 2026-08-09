@@ -5,6 +5,7 @@ import { stat } from "node:fs/promises";
 import {
   createDefaultConfig,
   defaultConfigPath,
+  effectiveProfileTarget,
   loadConfig,
   saveConfig,
   type ConfigResult,
@@ -24,7 +25,6 @@ import {
 import { diagnoseSetup, isActiveReady, loadSetupState, probeAll, saveSetupState } from "./setup.ts";
 import { appendRoutingEntry, describeRouting, formatAgents, formatRoutingLog, readRoutingEntries, routingLogPath, sessionSummaries, widgetRows, type RoutingLogEntry } from "./routing-log.ts";
 import type {
-  ActiveThinkingLevel,
   CanonicalProfile,
   Classification,
   FissionConfig,
@@ -103,6 +103,10 @@ function registerProvider(pi: ExtensionAPI, config: FissionConfig, discovery: Di
     };
   });
   const keylessLoopback = config.provider.apiKey === undefined;
+  // Pi merges a re-registration over the previous one and keeps any key the new config
+  // omits, so a keyless -> keyed transition would retain the Authorization-stripping
+  // streamSimple below. Drop the old registration first; it is a no-op when absent.
+  if (typeof pi.unregisterProvider === "function") pi.unregisterProvider(config.provider.id);
   pi.registerProvider(config.provider.id, {
     name: "9Router (Pi Fission)",
     baseUrl: config.provider.baseUrl,
@@ -167,7 +171,7 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
   const environment = options.env ?? process.env;
   const configPath = options.configPath ?? defaultConfigPath(environment);
   const stderr = options.stderr ?? ((message: string) => process.stderr.write(message));
-  let configResult = await loadConfig(configPath);
+  const configResult = await loadConfig(configPath);
   let discovery: DiscoveryResult | null = null;
   let setup: SetupState | null = null;
 
@@ -218,7 +222,18 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     state.activeModel = displayModel(identity);
   };
 
-  const reroute = (): void => {
+  /** Per-repository profile targets, when the config declares any for this working directory. */
+  const overrideTargets = (config: FissionConfig, repo?: string): Partial<Record<CanonicalProfile, string>> | undefined => {
+    if (config.projectOverrides.length === 0) return undefined;
+    const targets: Partial<Record<CanonicalProfile, string>> = {};
+    for (const profile of CANONICAL_PROFILES) {
+      const target = effectiveProfileTarget(config, profile, repo);
+      if (target !== config.profiles[profile].modelId) targets[profile] = target;
+    }
+    return Object.keys(targets).length > 0 ? targets : undefined;
+  };
+
+  const reroute = (ctx?: ExtensionContext): void => {
     if (state.config.status !== "ready" || !state.discovery || !state.classification) {
       state.recommendation = null;
       return;
@@ -229,7 +244,29 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
       resolvedModels: state.discovery.resolvedProfiles,
       effectiveCapabilities: state.discovery.effectiveCapabilities,
       providerReady: state.discovery.status === "ready",
+      overrideTargets: overrideTargets(state.config.config, ctx?.cwd),
     });
+  };
+
+  /** Re-discover in the background when 9Router was unreachable at load, so the next prompt
+   *  recovers on its own. Never awaited: a down router must not stall the turn. */
+  let discoveryInFlight = false;
+  let lastDiscoveryAt = Date.now();
+  const RE_DISCOVERY_INTERVAL_MS = 60_000;
+  const ensureDiscovery = (): void => {
+    if (state.config.status !== "ready" || state.config.config.mode === "off") return;
+    if (state.discovery?.status === "ready" || discoveryInFlight) return;
+    if (Date.now() - lastDiscoveryAt < RE_DISCOVERY_INTERVAL_MS) return;
+    const config = state.config.config;
+    discoveryInFlight = true;
+    lastDiscoveryAt = Date.now();
+    void discoverModels(config, { fetch: options.fetch, env: environment })
+      .then((result) => {
+        state.discovery = result;
+        if (result.status === "ready") registerProvider(pi, config, result);
+      })
+      .catch(() => undefined)
+      .finally(() => { discoveryInFlight = false; });
   };
 
   const readThinkingLevel = (ctx?: ExtensionContext): PiThinkingLevel | null => {
@@ -460,11 +497,12 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     promptSeen = true;
     lastRestoreModel = null;
     lastRestoreAt = 0;
+    ensureDiscovery();
     const previousModel = modelIdentity(ctx);
     setActiveModel(previousModel);
     state.classification = classify({ text: event.prompt, imageCount: event.images?.length ?? 0 });
     state.routingReason = null;
-    reroute();
+    reroute(ctx);
 
     if (state.config.status !== "ready" || state.config.config.mode !== "active") {
       state.routingStatus = "idle";
@@ -649,7 +687,6 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
       const updated = { ...state.config.config, mode: requested } as FissionConfig;
       await saveConfig(configPath, updated);
       state.config = { status: "ready", path: configPath, config: updated, diagnostics: [] };
-      configResult = state.config;
       manualOverride = false;
       state.routingStatus = "idle";
       state.routingReason = null;
@@ -673,17 +710,16 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
       config = { ...applyMappings(config, parsed.mappings), mode: "shadow" };
       await saveConfig(configPath, config);
       state.config = { status: "ready", path: configPath, config, diagnostics: [] };
-      configResult = state.config;
-      state.discovery = await discoverModels(config, { fetch: options.fetch, env: environment });
-      discovery = state.discovery;
-      if (discovery.status !== "ready") {
+      const discovered = await discoverModels(config, { fetch: options.fetch, env: environment });
+      state.discovery = discovered;
+      if (discovered.status !== "ready") {
         state.routingStatus = "setup-blocked";
-        state.routingReason = discovery.diagnostic;
+        state.routingReason = discovered.diagnostic;
         updateFooter(state, ctx);
-        report(ctx, `fission setup: 9Router unavailable · ${discovery.diagnostic}`, "warning");
+        report(ctx, `fission setup: 9Router unavailable · ${discovered.diagnostic}`, "warning");
         return;
       }
-      const blocked = diagnoseSetup(config, discovery.models).filter((diagnostic) => !diagnostic.ok);
+      const blocked = diagnoseSetup(config, discovered.models).filter((diagnostic) => !diagnostic.ok);
       if (blocked.length > 0) {
         state.routingStatus = "setup-blocked";
         state.routingReason = blocked.map((item) => `${item.profile}: ${item.issues.join(", ")}`).join(" · ");
@@ -699,7 +735,6 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
         probes: result.probes,
       };
       await saveSetupState(configPath, nextSetup);
-      setup = nextSetup;
       state.setup = nextSetup;
       if (!result.complete) {
         state.routingStatus = "setup-blocked";
@@ -711,8 +746,7 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
       config = { ...config, mode: "active" };
       await saveConfig(configPath, config);
       state.config = { status: "ready", path: configPath, config, diagnostics: [] };
-      configResult = state.config;
-      registerProvider(pi, config, discovery);
+      registerProvider(pi, config, discovered);
       manualOverride = false;
       state.routingStatus = "idle";
       state.routingReason = null;

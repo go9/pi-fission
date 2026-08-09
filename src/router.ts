@@ -173,10 +173,13 @@ export async function discoverModels(
     return emptyResult("malformed", "model catalogue must contain a data array");
   }
 
+  // One unparseable entry must not discard the whole catalogue: 9Router can list a group
+  // this version does not understand, and dropping every model would disable routing until
+  // Pi restarts. If nothing survives, that is the "empty" case below.
   const rawModels = (payload as { data: unknown[] }).data;
-  const models = rawModels.map(parseModel);
-  if (models.some((model) => model === null)) return emptyResult("malformed", "model catalogue contains an invalid model entry");
-  const uniqueModels = [...new Map((models as DiscoveredModel[]).map((model) => [model.id, model])).values()];
+  const models = rawModels.map(parseModel).filter((model): model is DiscoveredModel => model !== null);
+  const skipped = rawModels.length - models.length;
+  const uniqueModels = [...new Map(models.map((model) => [model.id, model])).values()];
   if (uniqueModels.length === 0) return emptyResult("empty", "model catalogue is empty");
 
   const resolvedProfiles = resolveProfiles(config, uniqueModels);
@@ -187,6 +190,6 @@ export async function discoverModels(
     resolvedProfiles,
     effectiveCapabilities: effectiveCapabilities(config, uniqueModels, resolvedProfiles),
     unresolvedProfiles,
-    diagnostic: `discovered ${uniqueModels.length} logical model${uniqueModels.length === 1 ? "" : "s"}; ${unresolvedProfiles.length} unresolved profile${unresolvedProfiles.length === 1 ? "" : "s"}`,
+    diagnostic: `discovered ${uniqueModels.length} logical model${uniqueModels.length === 1 ? "" : "s"}; ${unresolvedProfiles.length} unresolved profile${unresolvedProfiles.length === 1 ? "" : "s"}${skipped > 0 ? `; skipped ${skipped} unreadable entr${skipped === 1 ? "y" : "ies"}` : ""}`,
   };
 }

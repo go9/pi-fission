@@ -2,9 +2,9 @@
   "version": 2,
   "mode": "shadow",
   "provider": {
-    "id": "9router",
-    "baseUrl": "http://127.0.0.1:20128/v1",
-    "apiKey": "$NINE_ROUTER_API_KEY",
+    "id": "litellm",
+    "baseUrl": "http://127.0.0.1:4000/v1",
+    "apiKey": "$LITELLM_API_KEY",
     "timeoutMs": 15000
   },
   "profiles": {

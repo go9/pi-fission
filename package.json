@@ -1,15 +1,17 @@
 {
   "name": "pi-fission",
   "version": "0.2.0",
-  "description": "Automatic semantic routing from Pi to seven configurable 9Router model groups",
+  "description": "Automatic semantic routing from Pi to seven configurable models on any OpenAI-compatible endpoint",
   "type": "module",
   "license": "MIT",
   "keywords": [
     "pi-package",
     "pi-extension",
-    "9router",
-    "shadow-routing",
-    "active-routing"
+    "openai-compatible",
+    "model-routing",
+    "litellm",
+    "openrouter",
+    "ollama"
   ],
   "engines": {
     "node": ">=22.19.0"

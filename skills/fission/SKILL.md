@@ -1,11 +1,11 @@
 ---
 name: fission
-description: Pi Fission — automatic semantic routing from Pi to 9Router model groups. Use when routing, model selection, or the /fission* commands are involved; setup, modes, the live agents widget, the routing log, and model group configuration.
+description: Pi Fission — automatic semantic routing from Pi to seven models on any OpenAI-compatible endpoint. Use when routing, model selection, or the /fission* commands are involved; setup, modes, the live agents widget, the routing log, and provider configuration.
 ---
 
 # Pi Fission
 
-Pi Fission routes each prompt to a semantic 9Router group (fission splits one flame into many — the main session is the source, subagents are the split flames). It does NOT manage workflow: Flicker skills own planning, implementation, testing, and release.
+Pi Fission routes each prompt to one of seven semantic profiles (fission splits one flame into many — the main session is the source, subagents are the split flames). It does NOT manage workflow: planning, implementation, testing, and release belong to whatever tooling you already use.
 
 ## Setup (once)
 
@@ -13,10 +13,10 @@ Pi Fission routes each prompt to a semantic 9Router group (fission splits one fl
 /fission-setup
 ```
 
-- Discovers the 9Router groups, runs one real inference probe per profile
+- Discovers what the configured endpoint offers, runs one real inference probe per profile
 - Activates automatic routing only when all 7 profiles pass
 - Override group mappings: `/fission-setup code=my-group review=my-group`
-- The key comes from `$NINE_ROUTER_API_KEY` (keychain: `pi-fission-9router`)
+- The key is an env-var reference in the config (`"apiKey": "$YOUR_ENV_VAR"`); loopback endpoints may omit it
 
 ## Normal use
 
@@ -55,9 +55,14 @@ In the TUI, a widget above the editor shows the agent count. Press **ctrl+e** to
 
 A manual model selection pauses auto-routing; `/fission-mode active` resumes it. Session-start defaults and restore events are not treated as overrides.
 
-## 9Router groups
+## Provider
 
-Task groups map 1:1 to profiles; combos are ordered fallback chains. Current ordering: **sol > grok > deepseek > luna**, with `pool-deepseek` (round-robin: oc/deepseek-v4-flash-free, ocg/deepseek-v4-flash, kr/deepseek-3.2) as the free fallback tail. Gemini appears only in `fission-vision`.
+Any OpenAI-compatible endpoint: LiteLLM, Ollama, LM Studio, vLLM, OpenRouter, a vendor
+directly. Only `GET {baseUrl}/models` and `POST {baseUrl}/chat/completions` are used.
+
+Each profile maps to one name on that endpoint. If your endpoint supports groups or
+fallback chains behind a single name (LiteLLM and OpenRouter both do), Fission sees only
+the name — retries and failover stay the endpoint's job, not Fission's.
 
 ## Privacy
 
@@ -69,4 +74,4 @@ The routing log (`~/.pi/agent/extensions/pi-fission.routing.jsonl`) is content-f
 - **`fission setup blocked`** → run `/fission-setup`, fix the mapping whose row reads `FAILED`
 - **`manual model` in footer** → you selected a model; `/fission-mode active` resumes routing
 - **Routing log frozen** → the session is running stale code; restart
-- **Provider errors (429/402/403)** → group fallbacks handle them; check the 9Router provider's auth/balance
+- **Provider errors (429/402/403)** → these come from your endpoint; check its auth, balance, and any fallback chain behind the mapped name

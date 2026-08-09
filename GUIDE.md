@@ -3,7 +3,7 @@
 ## First run
 
 1. Install the package.
-2. Ensure `NINE_ROUTER_API_KEY` is available to Pi.
+2. Point `provider.baseUrl` at your OpenAI-compatible endpoint, and export the env var named by `provider.apiKey` if it is not loopback.
 3. Run:
 
 ```text
@@ -20,7 +20,7 @@ That is the entire normal setup.
 
 ## Daily use
 
-Prompt Pi normally. Fission routes automatically and displays the selected phase, semantic profile, and 9Router group in the footer.
+Prompt Pi normally. Fission routes automatically and displays the selected phase, semantic profile, and model in the footer.
 
 Examples:
 
@@ -30,7 +30,7 @@ Examples:
 - “Review this diff for regressions.” → `review`
 - A prompt with an image → `vision` or `design`
 
-Fission does not block tools, create plans, or advance stages. Flicker skills continue to handle workflow in Flicker repositories.
+Fission does not block tools, create plans, or advance stages. Workflow stays with whatever tooling you already use.
 
 ## Custom group names
 
@@ -94,4 +94,4 @@ If the footer says:
 /fission-mode active
 ```
 
-No workflow, tuning, delegation, approval, or dashboard commands are part of Fission. Those concerns belong to Pi and Flicker.
+No workflow, tuning, delegation, approval, or dashboard commands are part of Fission. Those concerns belong to Pi and your own tooling.

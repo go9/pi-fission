@@ -3,3 +3,4 @@ node_modules
 .pi-subagents/
 .pi-fusion.telemetry.jsonl
 .pi-fission.telemetry.jsonl
+.serena

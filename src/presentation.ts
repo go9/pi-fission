@@ -74,19 +74,28 @@ export function formatSetupTable(view: FissionView): string {
   const probedAt = view.setup?.lastProbedAt ? ` · last probed ${view.setup.lastProbedAt}` : "";
   const remedy = verified === entries.length ? "" : " · run /fission-setup probe";
 
-  const width = Math.max(...entries.map(([, target]) => target.modelId.length));
-  const rows = entries.map(([profile, target]) => {
-    const probe = probes[profile as keyof typeof probes];
+  const overrideProbes = view.setup?.overrideProbes ?? [];
+  const width = Math.max(
+    ...entries.map(([, target]) => target.modelId.length),
+    ...overrideProbes.map((probe) => probe.modelId.length),
+  );
+  const probeStatus = (probe: ProbeResult | undefined): string =>
     // Absent is NOT failure: an unprobed mapping is unverified, and saying "failed" would
     // report a claim we never tested.
-    const status = !probe ? "not probed" : probe.ok ? "ok" : `FAILED  ${probe.error ?? "probe failed"}`;
-    return `  ${profile.padEnd(9)} ${target.modelId.padEnd(width)}  ${status}`;
-  });
+    !probe ? "not probed" : probe.ok ? "ok" : `FAILED  ${probe.error ?? "probe failed"}`;
+  const rows = entries.map(([profile, target]) =>
+    `  ${profile.padEnd(9)} ${target.modelId.padEnd(width)}  ${probeStatus(probes[profile as keyof typeof probes])}`);
+  // Project overrides point at models no profile row names, so an unverified one would be
+  // invisible here. They sit below the seven and outside the verified count because their
+  // evidence gates one repository, not active mode.
+  const overrideRows = overrideProbes.map((probe) =>
+    `  ${"override".padEnd(9)} ${probe.modelId.padEnd(width)}  ${probeStatus(probe)}`);
 
   return [
     `fission setup: ${config.mode} · ${config.provider.baseUrl} · ${verified}/${entries.length} verified${probedAt}${health}${remedy}`,
     "",
     ...rows,
+    ...overrideRows,
   ].join("\n");
 }
 

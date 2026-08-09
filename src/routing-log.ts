@@ -64,6 +64,17 @@ function shortModel(model: string | null): string | null {
   return separator > 0 ? model.slice(separator + 1) : model;
 }
 
+/**
+ * Which model the session is actually running. Only a `route` moved it: every other kind
+ * still carries a toModel, because the recommendation is recorded whether or not it was
+ * applied — a `retained` entry ("model selection failed", "recommended model is
+ * unavailable") and a `restore-failed` one both name a model the session never reached.
+ * Reading toModel for those reported the recommendation as the live model.
+ */
+function currentModelOf(entry: RoutingLogEntry): string | null {
+  return entry.kind === "route" ? (entry.toModel ?? entry.fromModel) : entry.fromModel;
+}
+
 /** Default routing log path, next to the Fission config so every session shares it. */
 export function routingLogPath(configPath: string): string {
   return joinPath(dirname(configPath), "pi-fission.routing.jsonl");
@@ -169,10 +180,7 @@ export function sessionSummaries(entries: RoutingLogEntry[], now: number = Date.
       sessionId,
       sessionName: latest.sessionName ?? null,
       agent: latest.childAgent ?? null,
-      // manual and shadow sessions are running fromModel; only a route moved them to toModel.
-      currentModel: shortModel(latest.kind === "manual" || latest.kind === "shadow"
-        ? latest.fromModel
-        : (latest.toModel ?? latest.fromModel)),
+      currentModel: shortModel(currentModelOf(latest)),
       profile: latest.profile,
       phase: latest.phase,
       reason: latest.reason,
@@ -229,9 +237,11 @@ export function formatStats(entries: RoutingLogEntry[]): string[] {
     if (entry.profile) byProfile.set(entry.profile, (byProfile.get(entry.profile) ?? 0) + 1);
   }
 
-  // A manual pick landing on the very next decision of the same session, on a different
-  // model, is the user overruling that route. It is the only quality signal the log can
-  // carry without recording prompt content.
+  // A manual pick landing on the very next decision of the same session, on a model other
+  // than the routed one, is the user overruling that route. It is the only quality signal
+  // the log can carry without recording prompt content. The model the user actually chose
+  // is the manual entry's fromModel — its toModel is only what fission would have
+  // recommended at that prompt — so that is what the route's target is compared against.
   const overrides = new Map<string, number>();
   const bySession = new Map<string, RoutingLogEntry[]>();
   for (const entry of entries) {
@@ -243,7 +253,7 @@ export function formatStats(entries: RoutingLogEntry[]): string[] {
     list.forEach((entry, index) => {
       const next = list[index + 1];
       if (entry.kind !== "route" || !entry.profile || !next) return;
-      if (next.kind === "manual" && next.toModel !== entry.toModel) {
+      if (next.kind === "manual" && next.fromModel !== entry.toModel) {
         overrides.set(entry.profile, (overrides.get(entry.profile) ?? 0) + 1);
       }
     });
@@ -284,9 +294,7 @@ export function formatRoutingLog(entries: RoutingLogEntry[], maxSessions = MAX_R
   const lines: string[] = [...formatStats(entries), ""];
   for (const [sessionId, list] of shown) {
     const latest = list[list.length - 1]!;
-    const current = latest.kind === "manual" || latest.kind === "shadow"
-      ? formatModel(shortModel(latest.fromModel))
-      : formatModel(shortModel(latest.toModel ?? latest.fromModel));
+    const current = formatModel(shortModel(currentModelOf(latest)));
     const cwd = latest.cwd ? ` · ${latest.cwd}` : "";
     lines.push(`  session ${sessionId}${cwd}`);
     lines.push(`    now: ${current}${latest.profile ? ` (${latest.profile})` : ""}`);

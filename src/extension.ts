@@ -12,7 +12,7 @@ import {
 } from "./config.ts";
 import { classify } from "./classifier.ts";
 import { recommend } from "./policy.ts";
-import { discoverModels, type DiscoveredModel, type DiscoveryResult } from "./router.ts";
+import { constrainCapabilities, discoverModels, type DiscoveredModel, type DiscoveryResult } from "./router.ts";
 import {
   footerText,
   formatSetupTable,
@@ -208,15 +208,37 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     state.activeModel = displayModel(identity);
   };
 
-  /** Per-repository profile targets, when the config declares any for this working directory. */
-  const overrideTargets = (config: FissionConfig, repo?: string): Partial<Record<CanonicalProfile, string>> | undefined => {
-    if (config.projectOverrides.length === 0) return undefined;
-    const targets: Partial<Record<CanonicalProfile, string>> = {};
+  /**
+   * Per-repository profile targets, resolved against the discovered catalogue rather than
+   * substituted at selection time. An override is a different model, so it has to be judged
+   * as one: an override target the provider does not list makes its profile ineligible
+   * (model.unavailable) so routing falls through to another profile, and one that IS listed
+   * is capability-checked against what was discovered for it. Substituting the id after
+   * eligibility was computed from the default target declared every override eligible and
+   * failed late, at model selection.
+   */
+  const overriddenDiscovery = (
+    config: FissionConfig,
+    discovery: DiscoveryResult,
+    repo?: string,
+  ): Pick<DiscoveryResult, "resolvedProfiles" | "effectiveCapabilities"> => {
+    const { resolvedProfiles, effectiveCapabilities } = discovery;
+    if (discovery.status !== "ready" || config.projectOverrides.length === 0) return { resolvedProfiles, effectiveCapabilities };
+    const resolved = { ...resolvedProfiles };
+    const capabilities = { ...effectiveCapabilities };
     for (const profile of CANONICAL_PROFILES) {
       const target = effectiveProfileTarget(config, profile, repo);
-      if (target !== config.profiles[profile].modelId) targets[profile] = target;
+      if (target === config.profiles[profile].modelId) continue;
+      const discovered = discovery.models.find((model) => model.id === target);
+      if (discovered) {
+        resolved[profile] = target;
+        capabilities[profile] = constrainCapabilities(config.profiles[profile].capabilities, discovered);
+      } else {
+        delete resolved[profile];
+        delete capabilities[profile];
+      }
     }
-    return Object.keys(targets).length > 0 ? targets : undefined;
+    return { resolvedProfiles: resolved, effectiveCapabilities: capabilities };
   };
 
   const reroute = (ctx?: ExtensionContext): void => {
@@ -224,13 +246,13 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
       state.recommendation = null;
       return;
     }
+    const overridden = overriddenDiscovery(state.config.config, state.discovery, ctx?.cwd);
     state.recommendation = recommend({
       classification: state.classification,
       config: state.config.config,
-      resolvedModels: state.discovery.resolvedProfiles,
-      effectiveCapabilities: state.discovery.effectiveCapabilities,
+      resolvedModels: overridden.resolvedProfiles,
+      effectiveCapabilities: overridden.effectiveCapabilities,
       providerReady: state.discovery.status === "ready",
-      overrideTargets: overrideTargets(state.config.config, ctx?.cwd),
     });
   };
 
@@ -648,6 +670,7 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
         complete: result.complete,
         lastProbedAt: new Date().toISOString(),
         probes: result.probes,
+        overrideProbes: result.overrideProbes,
       };
       await saveSetupState(configPath, nextSetup);
       state.setup = nextSetup;

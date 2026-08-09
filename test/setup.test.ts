@@ -169,6 +169,38 @@ describe("setup diagnostics and probes", () => {
     assert.equal(isActiveReady({ ...staleTarget, mode: "active" }, { version: 1, complete, lastProbedAt: null, probes }), false);
   });
 
+  it("probes project-override targets too, without letting them gate active mode", async () => {
+    const base = validConfig({ provider: { ...validConfig().provider, baseUrl: "http://127.0.0.1:20128/v1", apiKey: undefined } });
+    const config = validConfig({
+      ...base,
+      projectOverrides: [
+        { repo: "/repo-a", profiles: { code: "repo-specific-code" } },
+        // A second repository on the same override model, and one pointing back at a global
+        // target: neither is worth a second probe.
+        { repo: "/repo-b", profiles: { code: "repo-specific-code", fast: "fission-explore" } },
+      ],
+    });
+    const probed: string[] = [];
+    const fetchImpl = async (_url: unknown, init?: RequestInit): Promise<Response> => {
+      const model = JSON.parse(String(init?.body)).model as string;
+      probed.push(model);
+      return new Response(chatCompletion(model === "repo-specific-code" ? "nope" : "OK"), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const { probes, overrideProbes, complete, failures } = await probeAll(config, { fetch: fetchImpl as unknown as typeof fetch, env: {} });
+    assert.equal(probed.filter((model) => model === "repo-specific-code").length, 1, "one probe per distinct override target");
+    assert.equal(probed.filter((model) => model === "fission-explore").length, 1, "an override onto a global target is not probed twice");
+    assert.equal(probed.length, 8);
+    assert.equal(overrideProbes.length, 1);
+    assert.equal(overrideProbes[0]?.modelId, "repo-specific-code");
+    assert.equal(overrideProbes[0]?.profile, "code", "the probe says which mapping the override stands in for");
+    assert.equal(overrideProbes[0]?.ok, false);
+    // A failing override belongs to one repository; the seven global targets all passed.
+    assert.equal(complete, true);
+    assert.deepEqual(failures, []);
+    assert.equal(Object.keys(probes).length, 7);
+    assert.equal(isActiveReady({ ...config, mode: "active" }, { version: 1, complete, lastProbedAt: null, probes, overrideProbes }), true);
+  });
+
   it("persists setup state and rejects an active mode without a complete setup file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-fission-setup-"));
     const configPath = join(dir, "pi-fission.json");
@@ -185,6 +217,13 @@ describe("setup diagnostics and probes", () => {
     const loaded = await loadSetupState(configPath);
     assert.equal(loaded.complete, true);
     assert.equal(loaded.probes.reason?.ok, true);
+    assert.equal(loaded.overrideProbes, undefined, "state written before overrides were probed still loads");
+
+    const withOverrides = { ...setup, overrideProbes: [
+      { profile: "code" as const, modelId: "repo-specific-code", ok: true, keyless: true, probedAt: "2026-01-01T00:00:00.000Z" },
+    ] };
+    await saveSetupState(configPath, withOverrides);
+    assert.equal((await loadSetupState(configPath)).overrideProbes?.[0]?.modelId, "repo-specific-code");
     const file = await readFile(defaultSetupStatePath(configPath), "utf8");
     assert.doesNotMatch(file, /Bearer|Authorization|apiKey/);
   });

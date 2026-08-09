@@ -107,4 +107,7 @@ export interface SetupState {
   complete: boolean;
   lastProbedAt: string | null;
   probes: Partial<Record<CanonicalProfile, ProbeResult>>;
+  /** Project-override targets that were probed. Absent in state written before overrides
+   *  were probed at all, and never part of active readiness. */
+  overrideProbes?: ProbeResult[];
 }

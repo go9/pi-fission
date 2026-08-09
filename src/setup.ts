@@ -168,22 +168,53 @@ export async function runProbe(
   };
 }
 
-/** Probe all seven profiles; returns results plus aggregate readiness. */
+/**
+ * Every distinct model a project override points at. These are targets no profile row
+ * covers, so without probing them an override reaches active mode entirely unverified.
+ * The profile is the first one the override applies to: it says which mapping the model
+ * stands in for, and is not a claim about that profile's global target.
+ */
+function overrideTargets(config: FissionConfig): Map<string, CanonicalProfile> {
+  const global = new Set(CANONICAL_PROFILES.map((profile) => config.profiles[profile].modelId));
+  const targets = new Map<string, CanonicalProfile>();
+  for (const override of config.projectOverrides) {
+    for (const profile of CANONICAL_PROFILES) {
+      const modelId = override.profiles[profile];
+      if (!modelId || global.has(modelId) || targets.has(modelId)) continue;
+      targets.set(modelId, profile);
+    }
+  }
+  return targets;
+}
+
+/** Probe all seven profiles plus every project-override target; returns results plus
+ *  aggregate readiness. Readiness stays global-only: a repository-specific override that
+ *  fails must not block active mode everywhere else. */
 export async function probeAll(
   config: FissionConfig,
   options: SetupProbeOptions = {},
-): Promise<{ probes: Partial<Record<CanonicalProfile, ProbeResult>>; complete: boolean; failures: CanonicalProfile[] }> {
+): Promise<{
+  probes: Partial<Record<CanonicalProfile, ProbeResult>>;
+  overrideProbes: ProbeResult[];
+  complete: boolean;
+  failures: CanonicalProfile[];
+}> {
   // Concurrently: sequentially this was seven timeouts deep, so a stalled provider blocked
   // /fission-setup for up to 105s instead of one probe timeout.
-  const results = await Promise.all(CANONICAL_PROFILES.map((profile) =>
-    runProbe(config, profile, config.profiles[profile].modelId, options)));
+  const overrides = [...overrideTargets(config).entries()];
+  const all = await Promise.all([
+    ...CANONICAL_PROFILES.map((profile) => runProbe(config, profile, config.profiles[profile].modelId, options)),
+    ...overrides.map(([modelId, profile]) => runProbe(config, profile, modelId, options)),
+  ]);
+  const results = all.slice(0, CANONICAL_PROFILES.length);
+  const overrideProbes = all.slice(CANONICAL_PROFILES.length);
   const probes: Partial<Record<CanonicalProfile, ProbeResult>> = {};
   const failures: CanonicalProfile[] = [];
   for (const result of results) {
     probes[result.profile] = result;
     if (!result.ok) failures.push(result.profile);
   }
-  return { probes, complete: failures.length === 0, failures };
+  return { probes, overrideProbes, complete: failures.length === 0, failures };
 }
 
 /** Load the durable setup state. Missing file means setup is incomplete. */

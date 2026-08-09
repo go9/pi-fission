@@ -116,6 +116,34 @@ describe("routing log", () => {
     assert.match(rendered, /\(4 older sessions not shown\)/, "truncation is stated, never silent");
   });
 
+  it("counts an override only when the user's own pick differs from the routed model", () => {
+    // The manual entry's fromModel is the model the user actually chose; its toModel is only
+    // what fission would have recommended, so comparing toModel to toModel counted nothing.
+    const routed = baseEntry({ toModel: "prov/x", profile: "code" });
+    const overruled = formatStats([
+      routed,
+      baseEntry({ kind: "manual", ts: "2026-08-07T00:01:00.000Z", fromModel: "prov/y", toModel: "prov/x" }),
+    ]);
+    assert.ok(overruled.some((line) => /you overrode 1 route \(most often code, 1\)/.test(line)), overruled.join("\n"));
+
+    const rePicked = formatStats([
+      routed,
+      baseEntry({ kind: "manual", ts: "2026-08-07T00:01:00.000Z", fromModel: "prov/x", toModel: "prov/x" }),
+    ]);
+    assert.ok(!rePicked.some((line) => /you overrode/.test(line)), "re-picking the routed model is not an override");
+  });
+
+  it("reports the model a session stayed on when the route never happened", () => {
+    // retained and restore-failed still carry the recommendation in toModel; the session
+    // itself never left fromModel.
+    for (const kind of ["retained", "restore-failed"] as const) {
+      const entries = [baseEntry({ kind, fromModel: "prov/a", toModel: "prov/b", switched: false })];
+      const now = Date.parse("2026-08-07T00:01:00.000Z");
+      assert.equal(sessionSummaries(entries, now)[0]?.currentModel, "a", `${kind} summary`);
+      assert.match(formatRoutingLog(entries), /now: a\b/, `${kind} routing log`);
+    }
+  });
+
   it("maps human reasons per routing kind", () => {
     assert.equal(describeRouting("route", "explore", []), "exploring the codebase");
     assert.equal(describeRouting("route", "implement", []), "writing code");

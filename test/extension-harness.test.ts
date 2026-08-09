@@ -555,6 +555,55 @@ describe("router-only Pi Fission extension", () => {
     }
   });
 
+  it("judges a project override as the model it is, not as the target it replaced", async () => {
+    // An override used to be substituted into the recommendation after eligibility had been
+    // computed from the DEFAULT target, so a missing model was declared eligible and failed
+    // at selection, and a weaker model was never capability-checked at all.
+    const mock = await listen((request, response) => {
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/v1/models") {
+        response.end(JSON.stringify({ data: [
+          ...CANONICAL_PROFILES.map((profile) => ({ id: validConfig().profiles[profile].modelId })),
+          { id: "weak-code", capabilities: { tools: true, reasoning: false, structuredOutput: true } },
+        ] }));
+        return;
+      }
+      response.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
+    });
+    const base = validConfig();
+    const config = validConfig({
+      mode: "active",
+      provider: { ...base.provider, baseUrl: mock.baseUrl },
+      projectOverrides: [
+        { repo: "/repo-missing", profiles: { code: "never-listed-code" } },
+        { repo: "/repo-weak", profiles: { code: "weak-code" } },
+      ],
+    });
+    const saved = await writeConfig(config);
+    await writeFile(join(saved.dir, "pi-fission.setup.json"), JSON.stringify(completeSetup(config)), "utf8");
+    const runtime = fakeApi();
+    const registry = [
+      ...CANONICAL_PROFILES.map((profile) => ({ provider: "9router", id: config.profiles[profile].modelId })),
+      { provider: "9router", id: "weak-code" },
+      { provider: "9router", id: "never-listed-code" },
+    ];
+    const fallback = { provider: "9router", id: config.profiles.reason.modelId };
+    try {
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+
+      const missing = fakeContext("/repo-missing", [], { provider: "existing", id: "original" }, registry);
+      await emit(runtime, missing, "before_agent_start", { prompt: "Implement a TypeScript helper", images: [] });
+      assert.deepEqual(runtime.selectionCalls.at(-1), fallback, "an override the provider never listed must not be attempted");
+      await emit(runtime, missing, "agent_settled", {});
+
+      const weak = fakeContext("/repo-weak", [], { provider: "existing", id: "original" }, registry);
+      await emit(runtime, weak, "before_agent_start", { prompt: "Implement a TypeScript helper", images: [] });
+      assert.deepEqual(runtime.selectionCalls.at(-1), fallback, "an override that cannot reason is not eligible for reasoning work");
+    } finally {
+      await mock.close();
+    }
+  });
+
   it("parses mode arguments without exposing workflow state", async () => {
     const saved = await fixture();
     const runtime = fakeApi();

@@ -144,4 +144,22 @@ describe("minimal status UI", () => {
     assert.match(probed, /code\s+fission-sidekick\s+not probed/, "unprobed must not read as failed");
     assert.match(probed, /1\/7 verified/);
   });
+
+  it("shows project-override targets as their own rows, outside the seven-profile count", () => {
+    const table = formatSetupTable(baseView({
+      setup: {
+        version: 1,
+        complete: true,
+        lastProbedAt: "2026-08-09T14:32:11Z",
+        probes: {},
+        overrideProbes: [
+          { profile: "code", modelId: "repo-specific-code", ok: true, probedAt: "t", keyless: false },
+          { profile: "fast", modelId: "repo-specific-fast", ok: false, error: "group not found", probedAt: "t", keyless: false },
+        ],
+      },
+    }));
+    assert.match(table, /override\s+repo-specific-code\s+ok/);
+    assert.match(table, /override\s+repo-specific-fast\s+FAILED\s+group not found/);
+    assert.match(table, /0\/7 verified/, "an override is not one of the seven mappings");
+  });
 });

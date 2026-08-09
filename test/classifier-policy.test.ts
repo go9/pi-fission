@@ -109,6 +109,20 @@ describe("capability policy", () => {
     assert.equal(design?.eligible, true);
   });
 
+  it("an unresolved profile is ineligible and routing falls through to the next one", () => {
+    // This is what a project override to a model the provider does not list resolves to:
+    // the extension drops the profile from resolvedModels rather than substituting an id
+    // that would only fail later, at model selection.
+    const { code, ...withoutCode } = allModels;
+    const classification = classify({ text: "Implement a TypeScript helper and tests" });
+    const route = recommend({ classification, config: validConfig(), resolvedModels: withoutCode, providerReady: true });
+    const evaluation = route.evaluations.find((item) => item.profile === "code");
+    assert.equal(evaluation?.eligible, false);
+    assert.ok(evaluation?.reasons.includes("model.unavailable"));
+    assert.equal(route.profile, "reason", "the preferred profile being unavailable must not stop routing");
+    assert.ok(route.reasonCodes.includes("policy.capability-fallback"));
+  });
+
   it("capability floors cover tools, reasoning, structured output, and context", () => {
     const config = validConfig();
     const classification = classify({ text: "review and validate this pull request" });

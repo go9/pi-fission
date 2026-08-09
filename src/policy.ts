@@ -48,8 +48,6 @@ export interface PolicyInput {
   resolvedModels: Partial<Record<CanonicalProfile, string>>;
   effectiveCapabilities?: Partial<Record<CanonicalProfile, Capabilities>>;
   providerReady: boolean;
-  /** Effective profile targets after project overrides (maps profile -> model id). */
-  overrideTargets?: Partial<Record<CanonicalProfile, string>>;
   /** When set (active workflow node), route through this profile if eligible. */
   forceProfile?: CanonicalProfile | null;
 }
@@ -57,7 +55,7 @@ export interface PolicyInput {
 export function recommend(input: PolicyInput): Recommendation {
   const { classification, config, resolvedModels, effectiveCapabilities, providerReady } = input;
   const evaluations = CANONICAL_PROFILES.map((profile) => {
-    const modelId = input.overrideTargets?.[profile] ?? resolvedModels[profile] ?? config.profiles[profile].modelId;
+    const modelId = resolvedModels[profile] ?? config.profiles[profile].modelId;
     const available = effectiveCapabilities?.[profile] ?? config.profiles[profile].capabilities;
     const gaps = capabilityGaps(classification.requiredCapabilities, available);
     if (!resolvedModels[profile]) gaps.unshift("model.unavailable");

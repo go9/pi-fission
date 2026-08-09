@@ -54,7 +54,19 @@ function fakeContext(
   } as unknown as ExtensionContext & { ui: { setWidget: (key: string, content?: string[]) => void } };
 }
 
-function fakeApi(options: { setModel?: (model: any, index: number) => boolean | Promise<boolean> } = {}) {
+/**
+ * Stands in for the Pi host. `setModel` mirrors AgentSession.setModel in
+ * pi-coding-agent 0.83.0 (dist/core/agent-session.js): it re-clamps the thinking level for
+ * the incoming model and emits `thinking_level_select` BEFORE emitting `model_select`, and
+ * it suppresses `model_select` entirely when the model is unchanged. Getting that order
+ * wrong hides real defects -- a stub that emitted nothing let Pi's own clamp be recorded as
+ * the user's thinking preference without any test noticing.
+ */
+function fakeApi(options: {
+  setModel?: (model: any, index: number) => boolean | Promise<boolean>;
+  /** Thinking levels each model id supports, mirroring Pi's clamp on switch. */
+  thinkingSupport?: Record<string, readonly string[]>;
+} = {}) {
   const handlers = new Map<string, Handler[]>();
   const commands = new Map<string, CommandHandler>();
   const providers: Array<{ name: string; provider: any }> = [];
@@ -62,6 +74,11 @@ function fakeApi(options: { setModel?: (model: any, index: number) => boolean | 
   const selectionCalls: any[] = [];
   const thinkingCalls: string[] = [];
   let thinkingLevel = "high";
+  let currentModel: any = null;
+  let lastContext: any = null;
+  const dispatch = async (name: string, event: any): Promise<void> => {
+    for (const handler of handlers.get(name) ?? []) await handler(event, lastContext);
+  };
   const api = {
     on(name: string, handler: Handler) {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);
@@ -71,15 +88,33 @@ function fakeApi(options: { setModel?: (model: any, index: number) => boolean | 
     registerShortcut(key: string, options: { description: string; handler: (ctx: any) => void | Promise<void> }) { shortcuts.set(key, options); },
     async setModel(model: any) {
       selectionCalls.push(model);
-      return options.setModel?.(model, selectionCalls.length - 1) ?? true;
+      const accepted = await (options.setModel?.(model, selectionCalls.length - 1) ?? true);
+      if (!accepted) return false;
+      const previousModel = currentModel;
+      currentModel = model;
+      const supported = options.thinkingSupport?.[model.id];
+      if (supported && !supported.includes(thinkingLevel)) {
+        const previousLevel = thinkingLevel;
+        thinkingLevel = supported[supported.length - 1] ?? "off";
+        await dispatch("thinking_level_select", { level: thinkingLevel, previousLevel });
+      }
+      const unchanged = previousModel && previousModel.provider === model.provider && previousModel.id === model.id;
+      if (!unchanged) await dispatch("model_select", { model, previousModel, source: "set" });
+      return true;
     },
     getThinkingLevel() { return thinkingLevel; },
     setThinkingLevel(level: string) { thinkingLevel = level; thinkingCalls.push(level); },
   } as unknown as ExtensionAPI;
-  return { api, handlers, commands, providers, shortcuts, selectionCalls, thinkingCalls, setThinking(level: string) { thinkingLevel = level; } };
+  return {
+    api, handlers, commands, providers, shortcuts, selectionCalls, thinkingCalls,
+    setThinking(level: string) { thinkingLevel = level; },
+    useContext(context: any) { lastContext = context; },
+  };
 }
 
 async function emit(runtime: ReturnType<typeof fakeApi>, context: ExtensionContext, name: string, event: any): Promise<unknown[]> {
+  // Host-initiated events carry the context too, so setModel's own emissions reach handlers.
+  runtime.useContext(context);
   const results: unknown[] = [];
   for (const handler of runtime.handlers.get(name) ?? []) results.push(await handler(event, context));
   return results;
@@ -338,48 +373,65 @@ describe("router-only Pi Fission extension", () => {
     }
   });
 
-  it("ignores a late set-source event for the restored model so routing continues", async () => {
+  it("does not read the host's own switch events as manual overrides", async () => {
     const saved = await fixture();
     const runtime = fakeApi();
     const target = { provider: "9router", id: saved.config.profiles.code.modelId };
     const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target]);
     try {
       await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      // No hand-emitted events here: setModel emits model_select itself, exactly as
+      // AgentSession does, for both the route and the restore.
       await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
       assert.equal(runtime.selectionCalls.length, 1);
-      // Turn settles; Fission restores the previous model (second selection).
       await emit(runtime, context, "agent_settled", {});
       assert.equal(runtime.selectionCalls.length, 2);
-      // Pi emits a late set-source event for the restored model after the restore finished.
-      await emit(runtime, context, "model_select", { model: { provider: "existing", id: "original" }, previousModel: target, source: "set" });
       await emit(runtime, context, "before_agent_start", { prompt: "Implement another helper", images: [] });
-      assert.equal(runtime.selectionCalls.length, 3, "late restore set event must not be treated as a manual override");
+      assert.equal(runtime.selectionCalls.length, 3, "routing must survive its own echoes");
     } finally {
       await saved.mock.close();
     }
   });
 
-  it("ignores a late set-source event however long it takes to arrive", async () => {
+  it("still pauses routing when the user picks a model between turns", async () => {
     const saved = await fixture();
     const runtime = fakeApi();
     const target = { provider: "9router", id: saved.config.profiles.code.modelId };
     const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target]);
-    const realNow = Date.now;
     try {
       await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
       await emit(runtime, context, "agent_settled", {});
       assert.equal(runtime.selectionCalls.length, 2);
-      // Same scenario as the test above, except a loaded machine delivers Pi's echo of our
-      // own restore late. Whether an event is ours is a fact about causation, not about how
-      // fast the host happened to be.
-      Date.now = () => realNow() + 10_000;
-      await emit(runtime, context, "model_select", { model: { provider: "existing", id: "original" }, previousModel: target, source: "set" });
-      Date.now = realNow;
+      // The counterpart to the test above: suppressing our own echoes must not suppress a
+      // real choice. The previous wall-clock window swallowed exactly this for 3 seconds
+      // after every restore, because the user picked the model we had just restored.
+      await emit(runtime, context, "model_select", { model: { provider: "existing", id: "original" }, previousModel: target, source: "cycle" });
       await emit(runtime, context, "before_agent_start", { prompt: "Implement another helper", images: [] });
-      assert.equal(runtime.selectionCalls.length, 3, "a slow echo of our own restore is not a manual override");
+      assert.equal(runtime.selectionCalls.length, 2, "a user selection pauses automatic routing");
     } finally {
-      Date.now = realNow;
+      await saved.mock.close();
+    }
+  });
+
+  it("restores the user's thinking level, not the one Pi clamped for the routed group", async () => {
+    const saved = await fixture();
+    const codeGroup = saved.config.profiles.code.modelId;
+    // AgentSession.setModel re-clamps the thinking level to the incoming model's
+    // capabilities and announces it, before it announces the model switch.
+    const runtime = fakeApi({ thinkingSupport: { [codeGroup]: ["off", "low"] } });
+    const target = { provider: "9router", id: codeGroup };
+    const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target], "high");
+    try {
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
+      assert.equal(runtime.thinkingCalls.length, 0, "the clamp is the host's, not ours");
+      await emit(runtime, context, "agent_settled", {});
+      // The clamp to "low" was Pi reacting to our own switch. Restoring it as though the
+      // user had asked for it would quietly downgrade their thinking level on every
+      // routed turn, and it would stick.
+      assert.equal(runtime.thinkingCalls.at(-1), "high", "the level to restore is the user's own");
+    } finally {
       await saved.mock.close();
     }
   });

@@ -127,6 +127,44 @@ export async function runProbe(
     };
   }
 
+  // Strict OpenAI reasoning models (the o1/o3 class) reject max_tokens outright rather than
+  // ignoring it, so the first probe against one always fails on a parameter name the
+  // provider is otherwise happy to accept under a different key. One retry with the renamed
+  // field recovers the profile instead of permanently blocking active mode on it.
+  if (response.status === 400) {
+    let body = "";
+    try {
+      body = await response.text();
+    } catch {
+      // Best-effort only: an unreadable error body just skips the retry.
+    }
+    if (body.includes("max_completion_tokens")) {
+      try {
+        response = await (options.fetch ?? fetch)(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            model: target,
+            messages: [{ role: "user", content: PROBE_PROMPT }],
+            max_completion_tokens: 256,
+            stream: false,
+          }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error) {
+        const name = (error as Error).name;
+        return {
+          profile,
+          modelId: target,
+          ok: false,
+          error: name === "TimeoutError" || name === "AbortError" ? "probe timed out" : "probe request failed",
+          keyless: loopback && apiKey === null,
+          probedAt: now().toISOString(),
+        };
+      }
+    }
+  }
+
   if (!response.ok) {
     return {
       profile,

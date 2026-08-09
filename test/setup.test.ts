@@ -57,6 +57,30 @@ describe("full-product config", () => {
     assert.equal(effectiveProfileTarget(config, "fast"), "fission-explore", "no repo uses the global target");
   });
 
+  it("applies a project override from any subdirectory of its repository", () => {
+    const config = validConfig({
+      projectOverrides: [{ repo: "/repo-a", profiles: { fast: "override-model-a" } }],
+    });
+    assert.equal(
+      effectiveProfileTarget(config, "fast", "/repo-a/packages/app"),
+      "override-model-a",
+      "Pi launched from a subdirectory must still see the repo-level override",
+    );
+    assert.equal(
+      effectiveProfileTarget(config, "fast", "/repo-a-other"),
+      "fission-explore",
+      "a sibling that merely shares the prefix, without the path separator, must not match",
+    );
+  });
+
+  it("normalizes a trailing slash on the configured override repo before matching", () => {
+    const config = validConfig({
+      projectOverrides: [{ repo: "/repo-a/", profiles: { fast: "override-model-a" } }],
+    });
+    assert.equal(effectiveProfileTarget(config, "fast", "/repo-a"), "override-model-a");
+    assert.equal(effectiveProfileTarget(config, "fast", "/repo-a/packages/app"), "override-model-a");
+  });
+
   it("rejects an active mode config with missing profiles", () => {
     const config = validConfig();
     const raw = structuredClone(config) as unknown as Record<string, any>;
@@ -115,6 +139,43 @@ describe("setup diagnostics and probes", () => {
     for (const text of ["I will help", "OK, here is what I found", ""]) {
       assert.equal((await probeWith(text)).ok, false, `"${text}" is not an acknowledgement`);
     }
+  });
+
+  it("retries once with max_completion_tokens when a strict reasoning model rejects max_tokens", async () => {
+    const config = validConfig({ provider: { ...validConfig().provider, baseUrl: "http://127.0.0.1:20128/v1", apiKey: undefined } });
+    const bodies: Record<string, unknown>[] = [];
+    let calls = 0;
+    const fetchImpl = async (_url: unknown, init?: RequestInit): Promise<Response> => {
+      calls += 1;
+      bodies.push(JSON.parse(init?.body as string));
+      if (calls === 1) {
+        return new Response(
+          JSON.stringify({ error: { message: "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead." } }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(chatCompletion("OK"), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const result = await runProbe(config, "reason", "fission-plan", { fetch: fetchImpl as unknown as typeof fetch, env: {} });
+    assert.equal(result.ok, true);
+    assert.equal(calls, 2, "exactly one retry, not a retry loop");
+    assert.equal(bodies[0].max_tokens, 256);
+    assert.equal(bodies[0].max_completion_tokens, undefined);
+    assert.equal(bodies[1].max_completion_tokens, 256);
+    assert.equal(bodies[1].max_tokens, undefined);
+  });
+
+  it("does not retry a plain HTTP 400 that never mentions max_completion_tokens", async () => {
+    const config = validConfig({ provider: { ...validConfig().provider, baseUrl: "http://127.0.0.1:20128/v1", apiKey: undefined } });
+    let calls = 0;
+    const fetchImpl = async (): Promise<Response> => {
+      calls += 1;
+      return new Response(JSON.stringify({ error: { message: "invalid request" } }), { status: 400, headers: { "content-type": "application/json" } });
+    };
+    const result = await runProbe(config, "reason", "fission-plan", { fetch: fetchImpl as unknown as typeof fetch, env: {} });
+    assert.equal(result.ok, false);
+    assert.equal(calls, 1, "no retry without the max_completion_tokens marker");
+    assert.match(result.error ?? "", /HTTP 400/);
   });
 
   it("probes all seven profiles concurrently", async () => {

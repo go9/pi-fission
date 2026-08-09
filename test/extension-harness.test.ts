@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createFissionExtension } from "../src/extension.ts";
+import piFission from "../extensions/pi-fission.ts";
+import { isActiveReady } from "../src/setup.ts";
 import { listen, validConfig, writeConfig } from "../test-support/helpers.ts";
 import { CANONICAL_PROFILES, type SetupState } from "../src/types.ts";
 
@@ -295,6 +297,50 @@ describe("router-only Pi Fission extension", () => {
     }
   });
 
+  it("a failed re-probe from active mode does not persist a mode downgrade", async () => {
+    // Discovery and the mapping check must both pass so the run reaches probeAll -- this is
+    // proving the probe-failure path specifically, not an earlier bail.
+    const failingMock = await listen((request, response) => {
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/v1/models") {
+        response.end(JSON.stringify({ data: CANONICAL_PROFILES.map((profile) => ({ id: validConfig().profiles[profile].modelId })) }));
+        return;
+      }
+      response.end(JSON.stringify({ choices: [{ message: { content: "no" }, finish_reason: "stop" }] }));
+    });
+    const base = validConfig();
+    const config = validConfig({ mode: "active", provider: { ...base.provider, baseUrl: failingMock.baseUrl } });
+    const saved = await writeConfig(config);
+    await writeFile(join(saved.dir, "pi-fission.setup.json"), JSON.stringify(completeSetup(config)), "utf8");
+    const runtime = fakeApi();
+    const context = fakeContext(tmpdir(), []);
+    try {
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await runtime.commands.get("fission-setup")?.("probe", context);
+      const onDisk = JSON.parse(await readFile(saved.path, "utf8"));
+      assert.equal(onDisk.mode, "active", "a failed re-probe must not downgrade the persisted mode as a side effect");
+      const setupState = JSON.parse(await readFile(join(saved.dir, "pi-fission.setup.json"), "utf8"));
+      assert.equal(setupState.complete, false);
+      assert.equal(isActiveReady(onDisk, setupState), false, "routing must stay blocked by setup state, not by the mode field");
+    } finally {
+      await failingMock.close();
+    }
+  });
+
+  it("a successful probe from shadow mode still lands on active", async () => {
+    const saved = await fixture("shadow");
+    const runtime = fakeApi();
+    const context = fakeContext(tmpdir(), []);
+    try {
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await runtime.commands.get("fission-setup")?.("probe", context);
+      const onDisk = JSON.parse(await readFile(saved.path, "utf8"));
+      assert.equal(onDisk.mode, "active");
+    } finally {
+      await saved.mock.close();
+    }
+  });
+
   it("records a content-free routing entry with the switch reason", async () => {
     const saved = await fixture();
     const runtime = fakeApi();
@@ -498,6 +544,39 @@ describe("router-only Pi Fission extension", () => {
     }
   });
 
+  it("skips repeated re-renders across timer ticks while the routing log stays missing", async () => {
+    // No route ever happens in this test, so the routing log file is never created --
+    // exactly the case that used to make the polling tick re-read and re-render on every
+    // 5s cycle forever. Faking only setInterval (not Date/setTimeout) lets the timer be
+    // advanced without a real 10s sleep, while the real fs/promise work each tick kicks off
+    // still runs and settles normally.
+    const saved = await fixture();
+    const runtime = fakeApi();
+    const notifications: string[] = [];
+    const context = fakeContext(tmpdir(), notifications);
+    mock.timers.enable({ apis: ["setInterval"] });
+    try {
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await emit(runtime, context, "session_start", {});
+      const renders = () => notifications.filter((line) => line.startsWith("widget:pi-fission-agents:")).length;
+      const afterStart = renders();
+
+      mock.timers.tick(5000);
+      await new Promise((resolve) => { setTimeout(resolve, 20); });
+      const afterFirstTick = renders();
+
+      mock.timers.tick(5000);
+      await new Promise((resolve) => { setTimeout(resolve, 20); });
+      const afterSecondTick = renders();
+
+      assert.equal(afterFirstTick, afterStart + 1, "the first missing-log tick still renders the empty state once");
+      assert.equal(afterSecondTick, afterFirstTick, "a second missing-log tick must not re-render");
+    } finally {
+      mock.timers.reset();
+      await saved.mock.close();
+    }
+  });
+
   it("expands the widget to per-agent rows after a routed prompt", async () => {
     const saved = await fixture();
     const runtime = fakeApi();
@@ -617,5 +696,31 @@ describe("router-only Pi Fission extension", () => {
     } finally {
       await saved.mock.close();
     }
+  });
+
+  it("the real entrypoint never throws when init fails, and logs to stderr instead", async () => {
+    // Pi loads extensions/pi-fission.ts directly and has no recovery path of its own for a
+    // rejected init -- a throw here would take the whole host down over a bad config or a
+    // provider hiccup. Force a rejection with a pi stub whose first call throws, the same
+    // shape createFissionExtension hits on session_start regardless of config state.
+    const throwingApi = {
+      on() { throw new Error("host wiring exploded"); },
+    } as unknown as ExtensionAPI;
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    const originalConfigPath = process.env.PI_FISSION_CONFIG_PATH;
+    // Any nonexistent path works: loadConfig treats ENOENT as "unconfigured" rather than
+    // throwing, so the rejection this test proves against comes from the pi stub, not the
+    // config read -- pin it anyway so the test doesn't depend on the machine's real config.
+    process.env.PI_FISSION_CONFIG_PATH = join(tmpdir(), "pi-fission-entrypoint-test-missing.json");
+    let captured = "";
+    process.stderr.write = ((chunk: string) => { captured += chunk; return true; }) as typeof process.stderr.write;
+    try {
+      await assert.doesNotReject(() => piFission(throwingApi));
+    } finally {
+      process.stderr.write = originalWrite;
+      if (originalConfigPath === undefined) delete process.env.PI_FISSION_CONFIG_PATH;
+      else process.env.PI_FISSION_CONFIG_PATH = originalConfigPath;
+    }
+    assert.match(captured, /^\[pi-fission\] initialization failed: host wiring exploded\n$/);
   });
 });

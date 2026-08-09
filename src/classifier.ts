@@ -17,7 +17,9 @@ const PLAN = /\b(plan|architect(?:ure)?|design|strategy|approach|trade-?offs?|pr
 const DESIGN = /\b(ui|ux|mockup|mock-?up|wireframe|prototype|layout|usability|screen|styling|stylesheet|css|front-?end|visual design|design system|redesign)\b/i;
 const IMPLEMENT = /\b(implement|code|fix|bug|refactor|test|build|change|add|create|typescript|javascript|python|elixir)\b/i;
 const EXPLORE = /\b(explore|inspect|look at|find|locate|list|show|understand|summari[sz]e|quick|small)\b/i;
-const CLARIFY = /\b(clarify|explain (the|what|how|why)|what does|how does|why does|tell me about|how (do|are|is|can|should|would|will) (i|we|you)|what (is|are|about)|whats|how can|how do|how are)\b/i;
+// what'?s / how'?s: the apostrophe is optional so both "what's the deal" and the
+// already-supported bare "whats" match the same alternative.
+const CLARIFY = /\b(clarify|explain (the|what|how|why)|what does|how does|why does|tell me about|how (do|are|is|can|should|would|will) (i|we|you)|what (is|are|about)|what'?s|how'?s|how can|how do|how are)\b/i;
 const MUTATION = /\b(implement|code|fix|bug|refactor|build|change|add|create|write|edit|update|remove|delete|migrate|commit|push|merge|deploy)\b/i;
 /** Questions about how existing code behaves. Read-only even when they name a mutation
  *  verb as a noun ("what does the deploy script do"). */
@@ -53,10 +55,14 @@ const CONTINUATION_CONFIDENCE = 0.7;
 
 /** Each further turn without fresh evidence is one step more distant from the thing that
  *  was actually observed, so an inherited phase loses confidence as the chain grows. The
- *  decay is what bounds the chain: confidence falls under the policy's own 0.5 floor after
- *  five continued turns and routing stops assuming, with no separate counter or threshold.
- *  Real logs contain a 39-turn chain, so an undecayed inheritance would pin a phase — and
- *  its risk level, and the expensive profile that follows from it — far past its evidence. */
+ *  decay is what bounds the chain: confidence reaches the policy's own 0.5 floor after five
+ *  continued turns (0.7, 0.65, 0.6, 0.55, 0.5) and routing stops assuming, with no separate
+ *  counter or threshold. The result is rounded to two decimals so that landing exactly on
+ *  0.5 is exact arithmetic, not a float accident the policy's `<=` happens to catch — binary
+ *  floating point can't represent 0.05 exactly, so repeated subtraction alone gives
+ *  0.49999999999999994, one ULP below the floor. Real logs contain a 39-turn chain, so an
+ *  undecayed inheritance would pin a phase — and its risk level, and the expensive profile
+ *  that follows from it — far past its evidence. */
 const CONTINUATION_DECAY = 0.05;
 const CONTINUED = "phase.continued";
 
@@ -152,7 +158,7 @@ export function classify(input: ClassifierInput): Classification {
   const previous = input.previous;
   if (text && previous && previous.phase !== "unknown") {
     const confidence = previous.reasonCodes.includes(CONTINUED)
-      ? previous.confidence - CONTINUATION_DECAY
+      ? Number((previous.confidence - CONTINUATION_DECAY).toFixed(2))
       : Math.min(previous.confidence, CONTINUATION_CONFIDENCE);
     return result(
       previous.phase,

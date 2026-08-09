@@ -363,12 +363,17 @@ export function defaultSetupStatePath(configPath: string): string {
 }
 
 /** Effective profile target for a repository, applying project overrides.
- *  Only an override whose repo matches the given path applies; otherwise the
- *  global target is returned. */
+ *  An override applies to its repo and to any subdirectory of it -- Pi is
+ *  routinely launched from a subpackage, and an exact-equality match silently
+ *  lost the override the moment cwd was one level down. Matching on a bare
+ *  prefix would also catch an unrelated sibling ("/repo-x" under "/repo"), so
+ *  the match requires the path separator; a trailing slash on the configured
+ *  repo is normalized away first so it doesn't produce a double separator. */
 export function effectiveProfileTarget(config: FissionConfig, profile: CanonicalProfile, repo?: string): string {
   if (repo) {
     for (const override of config.projectOverrides) {
-      if (override.repo !== repo) continue;
+      const overrideRepo = override.repo.replace(/\/+$/, "");
+      if (repo !== overrideRepo && !repo.startsWith(`${overrideRepo}/`)) continue;
       const target = override.profiles[profile];
       if (target) return target;
     }

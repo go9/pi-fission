@@ -72,6 +72,11 @@ describe("deterministic classifier and policy", () => {
     assert.equal(classification.mutationIntent, "read-only");
   });
 
+  it("contractions of what/how still route to clarify", () => {
+    assert.equal(classify({ text: "what's the difference between these?" }).phase, "clarify");
+    assert.equal(classify({ text: "how's this supposed to work?" }).phase, "clarify");
+  });
+
   it("a mutation on a protected topic still escalates to protected risk and the reason profile", () => {
     const classification = classify({ text: "Implement an authentication and permissions migration" });
     assert.equal(classification.risk, "protected");
@@ -227,8 +232,10 @@ describe("design phase", () => {
       const config = validConfig();
       let current = previous;
       const routed: boolean[] = [];
+      const confidences: number[] = [];
       for (let turn = 0; turn < 10; turn += 1) {
         current = classify({ text: "keep going", previous: current });
+        confidences.push(current.confidence);
         routed.push(recommend({ classification: current, config, resolvedModels: allModels, providerReady: true }).profile !== null);
       }
       assert.ok(routed[0], "an immediate follow-up must still route");
@@ -236,6 +243,13 @@ describe("design phase", () => {
       // Once it gives up it must stay given up, not oscillate back into routing.
       const firstGiveUp = routed.indexOf(false);
       assert.ok(routed.slice(firstGiveUp).every((value) => value === false));
+      // The cutoff must be exact arithmetic (0.7, 0.65, 0.6, 0.55, 0.5), not a float
+      // accident: the fourth continued turn (0.55) still routes, the fifth lands on
+      // exactly 0.5 and is the one that stops.
+      assert.equal(confidences[3], 0.55);
+      assert.ok(routed[3]);
+      assert.equal(confidences[4], 0.5);
+      assert.ok(!routed[4]);
     });
 
     it("an escalated risk level is not inherited indefinitely", () => {

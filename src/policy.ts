@@ -74,10 +74,13 @@ export function recommend(input: PolicyInput): Recommendation {
 
   // This floor is load-bearing beyond its own decision: the classifier's continuation decay
   // has no counter of its own and relies on crossing this exact threshold to stop inheriting
-  // a stale phase (see CONTINUATION_DECAY). Moving it changes how many follow-up turns keep
-  // routing. "a chain stops routing once it outruns its evidence" in classifier-policy.test.ts
-  // pins the relationship and will fail if this moves.
-  if (classification.confidence < 0.5 || classification.phase === "unknown") {
+  // a stale phase (see CONTINUATION_DECAY). The comparison is inclusive of 0.5 because the
+  // decayed chain lands exactly on it (0.7 minus four 0.05 steps, rounded), and nothing else
+  // ever classifies at precisely 0.5 — so the fifth continued turn is the one that stops.
+  // Moving this threshold changes how many follow-up turns keep routing. "a chain stops
+  // routing once it outruns its evidence" in classifier-policy.test.ts pins the relationship
+  // and will fail if this moves.
+  if (classification.confidence <= 0.5 || classification.phase === "unknown") {
     return {
       profile: null,
       modelId: null,

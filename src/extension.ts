@@ -429,16 +429,23 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
   let widgetCtx: ExtensionContext | null = null;
   /** Last observed routing-log stat so the polling loop skips re-parses while nothing changed. */
   let lastLogStat: { size: number; mtimeMs: number } | null = null;
+  /** Whether the previous tick already found no log file. Without this, a session that
+   *  never routes (log never created) re-ran the full read+render every 5s tick forever,
+   *  since a missing file has no stat to compare against and always falls through. */
+  let lastLogMissing = false;
 
   const refreshWidget = async (force = false): Promise<void> => {
     if (!widgetCtx || typeof widgetCtx.ui.setWidget !== "function") return;
     if (!force) {
       try {
         const current = await stat(routingLogPath(configPath));
+        lastLogMissing = false;
         if (lastLogStat && current.size === lastLogStat.size && current.mtimeMs === lastLogStat.mtimeMs) return;
         lastLogStat = { size: current.size, mtimeMs: current.mtimeMs };
       } catch {
-        // Missing log: still render the empty state.
+        // Missing log: render the empty state once, then skip until the log appears.
+        if (lastLogMissing) return;
+        lastLogMissing = true;
       }
     }
     const entries = await readRoutingEntries(configPath);
@@ -643,28 +650,45 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
         report(ctx, `fission setup: refusing to overwrite invalid config · ${state.config.diagnostics.join("; ")}`, "warning");
         return;
       }
-      let config = state.config.status === "ready" ? state.config.config : createDefaultConfig();
-      config = { ...applyMappings(config, parsed.mappings), mode: "shadow" };
-      await saveConfig(configPath, config);
-      state.config = { status: "ready", path: configPath, config, diagnostics: [] };
-      const discovered = await discoverModels(config, { fetch: options.fetch, env: environment });
+      // Discover and probe against an in-memory candidate first, and persist exactly once
+      // per outcome. Saving a "shadow" downgrade up front (as this used to) made a failed
+      // probe run from active mode leave the config on disk downgraded as a side effect of
+      // merely checking it -- the previous mode is only replaced once activation actually
+      // succeeds.
+      const previousMode = state.config.status === "ready" ? state.config.config.mode : "shadow";
+      const baseConfig = state.config.status === "ready" ? state.config.config : createDefaultConfig();
+      const candidate = applyMappings(baseConfig, parsed.mappings);
+
+      // Mappings are saved on every failure path too -- the user typed them and the setup
+      // table should show them with their FAILED rows -- but the mode stays whatever was
+      // persisted before this run. isActiveReady already blocks a stale-active config whose
+      // probes don't match, so persisting the old mode here is safe, not just convenient.
+      const persistFailure = async (): Promise<void> => {
+        const config = { ...candidate, mode: previousMode };
+        await saveConfig(configPath, config);
+        state.config = { status: "ready", path: configPath, config, diagnostics: [] };
+      };
+
+      const discovered = await discoverModels(candidate, { fetch: options.fetch, env: environment });
       state.discovery = discovered;
       if (discovered.status !== "ready") {
+        await persistFailure();
         state.routingStatus = "setup-blocked";
         state.routingReason = discovered.diagnostic;
         updateFooter(state, ctx);
         report(ctx, `fission setup: provider unavailable · ${discovered.diagnostic}`, "warning");
         return;
       }
-      const blocked = diagnoseSetup(config, discovered.models).filter((diagnostic) => !diagnostic.ok);
+      const blocked = diagnoseSetup(candidate, discovered.models).filter((diagnostic) => !diagnostic.ok);
       if (blocked.length > 0) {
+        await persistFailure();
         state.routingStatus = "setup-blocked";
         state.routingReason = blocked.map((item) => `${item.profile}: ${item.issues.join(", ")}`).join(" · ");
         updateFooter(state, ctx);
         report(ctx, `fission setup: mapping blocked · ${state.routingReason}`, "warning");
         return;
       }
-      const result = await probeAll(config, { fetch: options.fetch, env: environment });
+      const result = await probeAll(candidate, { fetch: options.fetch, env: environment });
       const nextSetup: SetupState = {
         version: 1,
         complete: result.complete,
@@ -675,13 +699,14 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
       await saveSetupState(configPath, nextSetup);
       state.setup = nextSetup;
       if (!result.complete) {
+        await persistFailure();
         state.routingStatus = "setup-blocked";
         state.routingReason = result.failures.join(", ");
         updateFooter(state, ctx);
         report(ctx, `fission setup: blocked · failed profiles ${result.failures.join(", ")}`, "warning");
         return;
       }
-      config = { ...config, mode: "active" };
+      const config = { ...candidate, mode: "active" as const };
       await saveConfig(configPath, config);
       state.config = { status: "ready", path: configPath, config, diagnostics: [] };
       registerProvider(pi, config, discovered);
@@ -699,10 +724,4 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
       handler: (ctx) => toggleWidget(ctx),
     });
   }
-}
-
-export default function piFission(pi: ExtensionAPI): void {
-  void createFissionExtension(pi).catch((error) => {
-    process.stderr.write(`[pi-fission] initialization failed: ${error instanceof Error ? error.message : "unknown error"}\n`);
-  });
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { classify, observeToolPhase } from "../src/classifier.ts";
+import { classify } from "../src/classifier.ts";
 import { recommend } from "../src/policy.ts";
 import type { CanonicalProfile } from "../src/types.ts";
 import { validConfig } from "../test-support/helpers.ts";
@@ -72,24 +72,26 @@ describe("deterministic classifier and policy", () => {
     assert.equal(classification.mutationIntent, "read-only");
   });
 
-  it("tool observations merge requirements monotonically and preserve protected risk", () => {
-    const protectedVision = classify({
-      text: "Review this authentication screenshot with structured validation",
-      imageCount: 1,
-    });
-    assert.equal(protectedVision.risk, "protected");
-    assert.equal(protectedVision.requiredCapabilities.image, true);
-    const afterEdit = observeToolPhase(protectedVision, "edit");
-    assert.equal(afterEdit.phase, "implement");
-    assert.equal(afterEdit.risk, "protected");
-    assert.equal(afterEdit.requiredCapabilities.image, true);
-    assert.equal(afterEdit.requiredCapabilities.structuredOutput, true);
-    assert.equal(afterEdit.requiredCapabilities.tools, true);
-    assert.ok(afterEdit.requiredCapabilities.contextWindow >= protectedVision.requiredCapabilities.contextWindow);
-    const afterReview = observeToolPhase(afterEdit, "review");
-    assert.equal(afterReview.requiredCapabilities.image, true);
-    assert.equal(afterReview.requiredCapabilities.structuredOutput, true);
-    assert.equal(afterReview.risk, "protected");
+  it("a mutation on a protected topic still escalates to protected risk and the reason profile", () => {
+    const classification = classify({ text: "Implement an authentication and permissions migration" });
+    assert.equal(classification.risk, "protected");
+    assert.equal(classification.mutationIntent, "mutation");
+    const route = recommend({ classification, config: validConfig(), resolvedModels: allModels, providerReady: true });
+    assert.equal(route.profile, "reason");
+  });
+
+  it("a read-only question about a protected topic is not escalated", () => {
+    for (const text of [
+      "Explain how our authentication works",
+      "What does the deploy script do?",
+      "How does the billing migration work?",
+    ]) {
+      const classification = classify({ text });
+      assert.equal(classification.mutationIntent, "read-only", text);
+      assert.notEqual(classification.risk, "protected", `"${text}" is a question, not a risky operation`);
+      const route = recommend({ classification, config: validConfig(), resolvedModels: allModels, providerReady: true });
+      assert.notEqual(route.profile, "reason", `"${text}" must not burn the reason profile`);
+    }
   });
 });
 
@@ -129,5 +131,25 @@ describe("design phase", () => {
     assert.equal(classification.phase, "vision");
     const route = recommend({ classification, config: validConfig(), resolvedModels: allModels, providerReady: true });
     assert.equal(route.profile, "vision");
+  });
+
+  it("text-only UI work reaches the design profile without an attached image", () => {
+    for (const text of [
+      "Design a mockup for the settings screen",
+      "Redesign the inventory page UI",
+      "Improve the UX layout of this wireframe",
+      "Inspect the inventory pages and improve their usability",
+    ]) {
+      const classification = classify({ text });
+      assert.equal(classification.phase, "design", text);
+      assert.equal(classification.requiredCapabilities.image, false, "a text prompt must not demand image capability");
+      const route = recommend({ classification, config: validConfig(), resolvedModels: allModels, providerReady: true });
+      assert.equal(route.profile, "design", text);
+    }
+  });
+
+  it("architecture planning and UI implementation are not stolen by the design phase", () => {
+    assert.equal(classify({ text: "Design an architecture plan and trade-offs" }).phase, "plan");
+    assert.equal(classify({ text: "Implement the new settings screen layout" }).phase, "implement");
   });
 });

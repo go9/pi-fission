@@ -54,23 +54,22 @@ fission workers (2) · ctrl+e to collapse
   reviewer · fission-reviewer · reviewing the work
 ```
 
-`/fission-agents` prints the same summary in any mode.
+Outside the TUI, `/fission-routing` leads each session block with the same `now:` line.
 
 ## Status and troubleshooting
 
 ```text
-/fission-status
-/fission-explain
-/fission-config
-/fission-setup-status
-/fission-routing
-/fission-agents
+/fission-setup      the seven mappings, each beside its probe result
+/fission-routing    lifetime totals, then recent sessions and why each switched
 ```
 
 `/fission-routing` shows, per session (main agent and each subagent), the current model and why it was selected:
 
 ```text
-fission routing:
+fission: 377 prompts · 105 routed (28%) · 65 sessions · since 2026-08-07
+  fast 30 · code 23 · reason 22 · review 21 · research 7 · vision 2
+  you overrode 7 routes (most often review, 4)
+
   session 3f1a9c2b-... · /Users/you/Sites/app
     now: fission-sidekick (code)
     switched to fission-explore because exploring the codebase · 74%
@@ -82,10 +81,10 @@ Only the three most recent real switches are listed per session, and only the te
 If the footer says:
 
 - `setup required` — run `/fission-setup`.
-- `setup blocked` — inspect `/fission-setup-status` and fix the named mapping/group.
+- `setup blocked` — run `/fission-setup` and fix the mapping whose row reads `FAILED`.
 - `retained current` — confidence was low or the recommended group was unavailable.
 - `manual model` — you selected a model; run `/fission-mode active` to resume automation.
-- `restore failed` — inspect `/fission-status`, then select the desired model manually.
+- `restore failed` — select the desired model manually.
 
 ## Disable temporarily
 

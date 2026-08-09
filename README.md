@@ -69,28 +69,21 @@ fission workers (3) · ctrl+e to collapse
   worker 3f1a9c2b · fission-explore · exploring the codebase
 ```
 
-Each row shows the agent (main, a named subagent, its phase, or `worker <short id>` when the session has no stable name), the model it is currently using, and why it switched. The same view is available in any Pi mode as a command:
-
-```text
-/fission-agents
-```
+Each row shows the agent (main, a named subagent, its phase, or `worker <short id>` when the session has no stable name), the model it is currently using, and why it switched. Outside the TUI, `/fission-routing` leads each session block with the same `now:` line.
 
 The raw log lives at `~/.pi/agent/extensions/pi-fission.routing.jsonl`; `/fission-routing` shows the grouped history for the ten most recently active sessions. Entries contain only session id/name, working directory, phase, profile, model transitions, and reason codes — never prompts, code, or tool output. The file is self-pruning: once it passes 1 MB it is rewritten with the most recent 1,000 entries.
 
 ## Diagnostics
 
 ```text
-/fission
-/fission-status
-/fission-explain
-/fission-config
-/fission-setup-status
-/fission-routing
-/fission-agents
+/fission-setup                 show the seven mappings and each one's probe result
+/fission-setup probe           re-probe all seven and re-activate
+/fission-routing               lifetime totals, then recent sessions and why each switched
 /fission-mode active|shadow|off
 ```
 
-These commands are optional. Normal use requires no Fission command after setup.
+These commands are optional. Normal use requires no Fission command after setup — the
+footer and the ctrl+e widget carry the live picture.
 
 - `active`: route every eligible request automatically.
 - `shadow`: classify and display recommendations without switching models.

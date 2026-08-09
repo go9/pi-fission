@@ -1,6 +1,6 @@
 ---
 name: fission
-description: Pi Fission — automatic semantic routing from Pi to 9Router model groups. Use when routing, model selection, or the /fission* commands are involved; setup, modes, the live agents widget, the routing log, and 9Router group configuration.
+description: Pi Fission — automatic semantic routing from Pi to 9Router model groups. Use when routing, model selection, or the /fission* commands are involved; setup, modes, the live agents widget, the routing log, and model group configuration.
 ---
 
 # Pi Fission
@@ -28,16 +28,20 @@ fission: active · implement → code · fission-sidekick
 
 ## Commands
 
+There are three. The footer and the ctrl+e widget already answer "what is happening
+now" continuously, so no command restates them.
+
 | Command | What it does |
 |---|---|
-| `/fission-status` | mode, 9Router health, probes, last route, Pi model |
-| `/fission-explain` | why the last prompt routed where (phase, profile, group, confidence) |
-| `/fission-config` | the seven profile → group mappings |
-| `/fission-setup-status` | per-profile probe health |
-| `/fission-routing` | per-session routing history with switch reasons |
-| `/fission-agents` | summary of every active agent and its model |
-| `/fission-mode off|shadow|active` | disable / observe-only / auto-route |
-| `/fission-setup` | re-probe and re-activate |
+| `/fission-setup` | show the seven profile → group mappings **with** each one's probe result |
+| `/fission-setup probe` | re-probe all seven and re-activate (seven real inference calls) |
+| `/fission-setup code=my-group` | change a mapping, then probe |
+| `/fission-routing` | lifetime totals, then recent sessions and why each switched |
+| `/fission-mode off\|shadow\|active` | disable / observe-only / auto-route |
+
+`/fission-setup` with no arguments only *shows* — it never probes, because probing costs
+seven inference calls. A mapping that has not been probed reads `not probed`, never
+`FAILED`.
 
 ## Live widget
 
@@ -62,7 +66,7 @@ The routing log (`~/.pi/agent/extensions/pi-fission.routing.jsonl`) is content-f
 ## Troubleshooting
 
 - **After install/rename/upgrade, commands are missing** → restart Pi (extensions load at session start)
-- **`fission setup blocked`** → run `/fission-setup-status`, fix the named group/probe
+- **`fission setup blocked`** → run `/fission-setup`, fix the mapping whose row reads `FAILED`
 - **`manual model` in footer** → you selected a model; `/fission-mode active` resumes routing
 - **Routing log frozen** → the session is running stale code; restart
 - **Provider errors (429/402/403)** → group fallbacks handle them; check the 9Router provider's auth/balance

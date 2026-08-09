@@ -40,7 +40,7 @@ export function footerText(view: FissionView): string {
   if (mode === "off") return "fission: off";
   if (view.discovery?.status !== "ready") return `fission: ${mode} · 9Router unavailable`;
   if (view.routingStatus === "setup-blocked") return "fission: setup blocked";
-  if (view.routingStatus === "restore-failed") return "fission: restore failed · check /fission-status";
+  if (view.routingStatus === "restore-failed") return "fission: restore failed · select a model manually";
   if (view.routingStatus === "manual") return `fission: manual model · ${view.activeModel ?? "unknown"}`;
   const route = selectedRoute(view);
   if (route) {

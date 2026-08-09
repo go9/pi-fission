@@ -3,7 +3,7 @@ import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
-import { appendRoutingEntry, describeRouting, formatAgents, formatRoutingLog, readRoutingEntries, routingLogPath, sessionSummaries, widgetRows, type RoutingLogEntry } from "../src/routing-log.ts";
+import { appendRoutingEntry, describeRouting, formatRoutingLog, formatStats, readRoutingEntries, routingLogPath, sessionSummaries, widgetRows, type RoutingLogEntry } from "../src/routing-log.ts";
 
 const baseEntry = (overrides: Partial<RoutingLogEntry> = {}): RoutingLogEntry => ({
   version: 1,
@@ -86,7 +86,6 @@ describe("routing log", () => {
     assert.ok(expanded.some((row) => /main · fission-sidekick · writing code/.test(row)));
     assert.ok(expanded.some((row) => /reviewer · fission-reviewer · reviewing the work/.test(row)));
     assert.doesNotMatch(expanded.join("\n"), /secret|prompt text/i);
-    assert.match(formatAgents(scoped, "main"), /reviewer — fission-reviewer · reviewing the work \(review\)/);
     await rm(dir, { recursive: true, force: true });
   });
 

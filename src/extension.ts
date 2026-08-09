@@ -15,10 +15,7 @@ import { recommend } from "./policy.ts";
 import { discoverModels, type DiscoveredModel, type DiscoveryResult } from "./router.ts";
 import {
   footerText,
-  formatConfig,
-  formatExplain,
-  formatSetup,
-  formatStatus,
+  formatSetupTable,
   type FissionView,
   type RoutingStatus,
 } from "./presentation.ts";
@@ -36,7 +33,7 @@ import {
   takeQueuedSelection,
   type ModelIdentity,
 } from "./route-controller.ts";
-import { appendRoutingEntry, describeRouting, formatAgents, formatRoutingLog, readRoutingEntries, routingLogPath, sessionSummaries, widgetRows, type RoutingLogEntry } from "./routing-log.ts";
+import { appendRoutingEntry, describeRouting, formatRoutingLog, readRoutingEntries, routingLogPath, sessionSummaries, widgetRows, type RoutingLogEntry } from "./routing-log.ts";
 import type {
   CanonicalProfile,
   Classification,
@@ -566,33 +563,14 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     await restoreRoute(ctx);
   });
 
-  pi.registerCommand("fission", {
-    description: "Show Pi Fission routing status",
-    handler: async (_args, ctx) => report(ctx, formatStatus(asView(state)), state.routingStatus === "restore-failed" ? "warning" : "info"),
-  });
-  pi.registerCommand("fission-status", {
-    description: "Show Pi Fission routing status",
-    handler: async (_args, ctx) => report(ctx, formatStatus(asView(state)), state.routingStatus === "restore-failed" ? "warning" : "info"),
-  });
-  pi.registerCommand("fission-config", {
-    description: "Show the seven semantic profile mappings",
-    handler: async (_args, ctx) => report(ctx, formatConfig(asView(state))),
-  });
-  pi.registerCommand("fission-explain", {
-    description: "Explain the latest automatic route",
-    handler: async (_args, ctx) => report(ctx, formatExplain(asView(state))),
-  });
+  // Three commands, not nine. The footer (mode + current route) and the ctrl+e widget
+  // (per-agent live state) already answer "what is happening now" continuously, so the
+  // commands that restated them were worse copies of ambient UI. What remains is one
+  // command per question that the always-on surfaces cannot answer: how is it
+  // configured, what has it done, and change the mode.
   pi.registerCommand("fission-routing", {
-    description: "Show current models and why each session switched (main agent and subagents)",
+    description: "Show what routing has done: lifetime totals, then recent sessions and why each switched",
     handler: async (_args, ctx) => report(ctx, formatRoutingLog(await readRoutingEntries(configPath))),
-  });
-  pi.registerCommand("fission-agents", {
-    description: "Show a summary of this session's agents (main and subagents) and the model each is using",
-    handler: async (_args, ctx) => report(ctx, formatAgents(sessionSummaries(await readRoutingEntries(configPath), Date.now(), state.sessionId), state.sessionId)),
-  });
-  pi.registerCommand("fission-setup-status", {
-    description: "Show seven-profile setup and probe status",
-    handler: async (_args, ctx) => report(ctx, formatSetup(asView(state))),
   });
   pi.registerCommand("fission-mode", {
     description: "Show or set automatic routing mode (off, shadow, active)",
@@ -625,9 +603,16 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     },
   });
   pi.registerCommand("fission-setup", {
-    description: "Configure, probe, and activate seven 9Router profile groups",
+    description: "Show the seven profile mappings and their validity; `probe` or `profile=group` to re-verify",
     handler: async (args, ctx) => {
-      const parsed = setupMappings(args);
+      // Showing is the common case and is free; probing makes seven real inference calls,
+      // so it happens only when asked for explicitly.
+      const requested = args.trim();
+      if (requested === "") {
+        report(ctx, formatSetupTable(asView(state)));
+        return;
+      }
+      const parsed = setupMappings(requested === "probe" ? "" : requested);
       if (parsed.error) {
         report(ctx, `fission setup: ${parsed.error}`, "warning");
         return;

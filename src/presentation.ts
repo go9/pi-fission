@@ -50,40 +50,43 @@ export function footerText(view: FissionView): string {
   return `fission: ${mode} · ready`;
 }
 
-export function formatStatus(view: FissionView): string {
-  if (view.config.status === "unconfigured") return `fission: setup required · run /fission-setup · config ${view.config.path}`;
-  if (view.config.status !== "ready") return `fission: invalid-config · ${view.config.diagnostics.join("; ")}`;
-  const discovery = view.discovery?.status === "ready" ? "9Router ready" : view.discovery?.diagnostic ?? "discovery not started";
-  const setup = view.setup?.complete ? "7/7 probes passed" : "setup incomplete";
-  const route = selectedRoute(view) ?? "no route yet";
-  const reason = view.routingReason ? ` · ${view.routingReason}` : "";
-  return `fission: ${view.config.config.mode} · ${discovery} · ${setup} · ${view.routingStatus} · ${route}${reason} · Pi model ${view.activeModel ?? "unknown"}`;
-}
+/**
+ * The seven mappings and their live validity as ONE table.
+ *
+ * These were two commands (`/fission-config`, `/fission-setup-status`) and that was the
+ * wrong split: a mapping is a declaration and a probe is the evidence for it, so reading
+ * either alone tells you nothing actionable — you had to run both. Rendering them as
+ * columns of one table is what the two commands were always trying to say together.
+ */
+export function formatSetupTable(view: FissionView): string {
+  if (view.config.status === "unconfigured") return `fission setup: required · run /fission-setup probe · config ${view.config.path}`;
+  if (view.config.status !== "ready") return `fission setup: invalid config · ${view.config.path} · ${view.config.diagnostics.join("; ")}`;
 
-export function formatConfig(view: FissionView): string {
-  if (view.config.status !== "ready") return `fission config: ${view.config.status} · ${view.config.path} · ${view.config.diagnostics.join("; ")}`;
   const config = view.config.config;
-  const mappings = Object.entries(config.profiles).map(([profile, target]) => `  ${profile.padEnd(9)} ${target.modelId}`).join("\n");
-  return `fission config: ${config.mode} · ${config.provider.baseUrl} · profiles 7\n${mappings}`;
-}
+  const probes = view.setup?.probes ?? {};
+  const entries = Object.entries(config.profiles);
+  const verified = entries.filter(([profile]) => probes[profile as keyof typeof probes]?.ok).length;
 
-export function formatExplain(view: FissionView): string {
-  if (!view.classification || !view.recommendation) return `fission explain: ${view.discovery?.diagnostic ?? "no request classified yet"}`;
-  const recommendation = view.recommendation;
-  const selected = recommendation.profile && recommendation.modelId
-    ? `${recommendation.profile} → ${recommendation.modelId}`
-    : "current model retained";
-  return `fission explain: ${view.classification.phase} · ${view.classification.risk} risk · ${selected} · confidence ${percent(recommendation.confidence)} · ${recommendation.reasonCodes.join(", ")}`;
-}
+  const reachability = view.discovery?.status === "ready"
+    ? null
+    : view.discovery?.diagnostic ?? "provider not reached yet";
+  const health = reachability ? ` · ${reachability}` : "";
+  const probedAt = view.setup?.lastProbedAt ? ` · last probed ${view.setup.lastProbedAt}` : "";
+  const remedy = verified === entries.length ? "" : " · run /fission-setup probe";
 
-export function formatSetup(view: FissionView): string {
-  if (view.config.status !== "ready") return "fission setup: required · run /fission-setup";
-  if (!view.setup?.complete) {
-    const failures = Object.entries(view.setup?.probes ?? {})
-      .filter(([, probe]) => probe && !probe.ok)
-      .map(([profile, probe]) => `${profile}=${probe?.error ?? "failed"}`);
-    return `fission setup: incomplete${failures.length ? ` · ${failures.join(" · ")}` : " · run /fission-setup"}`;
-  }
-  return `fission setup: complete · 7/7 profiles · ${view.config.config.mode} · ${view.setup.lastProbedAt ?? "unknown time"}`;
+  const width = Math.max(...entries.map(([, target]) => target.modelId.length));
+  const rows = entries.map(([profile, target]) => {
+    const probe = probes[profile as keyof typeof probes];
+    // Absent is NOT failure: an unprobed mapping is unverified, and saying "failed" would
+    // report a claim we never tested.
+    const status = !probe ? "not probed" : probe.ok ? "ok" : `FAILED  ${probe.error ?? "probe failed"}`;
+    return `  ${profile.padEnd(9)} ${target.modelId.padEnd(width)}  ${status}`;
+  });
+
+  return [
+    `fission setup: ${config.mode} · ${config.provider.baseUrl} · ${verified}/${entries.length} verified${probedAt}${health}${remedy}`,
+    "",
+    ...rows,
+  ].join("\n");
 }
 

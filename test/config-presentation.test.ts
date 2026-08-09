@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { createDefaultConfig, parseConfig, type ConfigResult } from "../src/config.ts";
 import { classify } from "../src/classifier.ts";
 import { recommend } from "../src/policy.ts";
-import { footerText, formatConfig, formatExplain, formatSetup, formatStatus, type FissionView } from "../src/presentation.ts";
+import { footerText, formatSetupTable, type FissionView } from "../src/presentation.ts";
 import type { CanonicalProfile, Capabilities } from "../src/types.ts";
 import type { DiscoveryResult } from "../src/router.ts";
 import { validConfig } from "../test-support/helpers.ts";
@@ -87,16 +87,38 @@ describe("minimal status UI", () => {
     const route = recommend({ classification: code, config: validConfig(), resolvedModels: allModels, effectiveCapabilities: allCapabilities, providerReady: true });
     const routed = baseView({ classification: code, recommendation: route, routingStatus: "routed" });
     assert.match(footerText(routed), /implement → code · code/);
-    assert.match(formatStatus(routed), /routed/);
-    assert.match(formatExplain(routed), /code → code/);
 
     assert.match(footerText({ ...routed, routingStatus: "retained" }), /retained current/);
     assert.match(footerText({ ...routed, routingStatus: "manual" }), /manual model/);
   });
 
-  it("shows seven mappings and concise setup status", () => {
-    assert.match(formatConfig(baseView()), /profiles 7/);
-    assert.match(formatConfig(baseView()), /fast\s+fission-explore/);
-    assert.match(formatSetup(baseView()), /incomplete/);
+  it("shows every mapping beside the evidence for it, in one table", () => {
+    const table = formatSetupTable(baseView());
+    // The declaration and the verdict on it must appear on the SAME row: reading either
+    // alone is what made the two old commands feel redundant.
+    assert.match(table, /fast\s+fission-explore\s+not probed/);
+    for (const profile of ["fast", "code", "reason", "review", "research", "vision", "design"]) {
+      assert.match(table, new RegExp(`\\n  ${profile}\\s`), `${profile} row missing`);
+    }
+    assert.match(table, /0\/7 verified/);
+    assert.match(table, /run \/fission-setup probe/);
+  });
+
+  it("distinguishes a failed probe from one that never ran, and names the failure", () => {
+    const probed = formatSetupTable(baseView({
+      setup: {
+        version: 1,
+        complete: false,
+        lastProbedAt: "2026-08-09T14:32:11Z",
+        probes: {
+          fast: { profile: "fast", modelId: "fission-explore", ok: true, probedAt: "t", keyless: false },
+          review: { profile: "review", modelId: "fission-reviewer", ok: false, error: "group not found", probedAt: "t", keyless: false },
+        },
+      },
+    }));
+    assert.match(probed, /fast\s+fission-explore\s+ok/);
+    assert.match(probed, /review\s+fission-reviewer\s+FAILED\s+group not found/);
+    assert.match(probed, /code\s+fission-sidekick\s+not probed/, "unprobed must not read as failed");
+    assert.match(probed, /1\/7 verified/);
   });
 });

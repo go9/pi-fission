@@ -210,20 +210,65 @@ export function widgetRows(summaries: SessionSummary[], mainSessionId: string, e
   return rows;
 }
 
-/** Text version for /fission-agents (works in every Pi mode). */
-export function formatAgents(summaries: SessionSummary[], mainSessionId: string): string {
-  if (summaries.length === 0) return "fission agents: no active sessions in the last 15 minutes";
-  const lines = [`fission agents: ${summaries.length} active`];
-  for (const summary of summaries) {
-    lines.push(`  ${sessionLabel(summary, mainSessionId)} — ${summary.currentModel ?? "unknown"} · ${summary.reason}${summary.profile ? ` (${summary.profile})` : ""}`);
-  }
-  return lines.join("\n");
-}
-
 /** How many sessions `/fission-routing` renders before truncating. */
 const MAX_RENDERED_SESSIONS = 10;
 
-/** Render the routing history grouped by session, most recent first. */
+/**
+ * Lifetime totals across every recorded session — what routing has actually done.
+ *
+ * This is the header of the routing view rather than its own command: it is the same
+ * JSONL at a different zoom level, and splitting one question across two commands is
+ * what made the old surface feel redundant.
+ */
+export function formatStats(entries: RoutingLogEntry[]): string[] {
+  if (entries.length === 0) return [];
+  const sessions = new Set(entries.map((entry) => entry.sessionId));
+  const routed = entries.filter((entry) => entry.kind === "route");
+  const byProfile = new Map<string, number>();
+  for (const entry of routed) {
+    if (entry.profile) byProfile.set(entry.profile, (byProfile.get(entry.profile) ?? 0) + 1);
+  }
+
+  // A manual pick landing on the very next decision of the same session, on a different
+  // model, is the user overruling that route. It is the only quality signal the log can
+  // carry without recording prompt content.
+  const overrides = new Map<string, number>();
+  const bySession = new Map<string, RoutingLogEntry[]>();
+  for (const entry of entries) {
+    const list = bySession.get(entry.sessionId) ?? [];
+    list.push(entry);
+    bySession.set(entry.sessionId, list);
+  }
+  for (const list of bySession.values()) {
+    list.forEach((entry, index) => {
+      const next = list[index + 1];
+      if (entry.kind !== "route" || !entry.profile || !next) return;
+      if (next.kind === "manual" && next.toModel !== entry.toModel) {
+        overrides.set(entry.profile, (overrides.get(entry.profile) ?? 0) + 1);
+      }
+    });
+  }
+
+  const first = entries[0]!.ts.slice(0, 10);
+  const share = Math.round((routed.length / entries.length) * 100);
+  const spread = [...byProfile.entries()]
+    .sort(([, left], [, right]) => right - left)
+    .map(([profile, count]) => `${profile} ${count}`)
+    .join(" · ");
+
+  const lines = [
+    `fission: ${entries.length} prompts · ${routed.length} routed (${share}%) · ${sessions.size} sessions · since ${first}`,
+  ];
+  if (spread) lines.push(`  ${spread}`);
+  const totalOverrides = [...overrides.values()].reduce((sum, count) => sum + count, 0);
+  if (totalOverrides > 0) {
+    const worst = [...overrides.entries()].sort(([, left], [, right]) => right - left)[0]!;
+    lines.push(`  you overrode ${totalOverrides} route${totalOverrides === 1 ? "" : "s"} (most often ${worst[0]}, ${worst[1]})`);
+  }
+  return lines;
+}
+
+/** Render lifetime totals, then the recent history grouped by session, most recent first. */
 export function formatRoutingLog(entries: RoutingLogEntry[], maxSessions = MAX_RENDERED_SESSIONS): string {
   if (entries.length === 0) return "fission routing: no routing activity recorded yet";
   const sessions = new Map<string, RoutingLogEntry[]>();
@@ -236,7 +281,7 @@ export function formatRoutingLog(entries: RoutingLogEntry[], maxSessions = MAX_R
     .sort(([, left], [, right]) => right[right.length - 1]!.ts.localeCompare(left[left.length - 1]!.ts));
   const shown = ordered.slice(0, maxSessions);
   const omitted = ordered.length - shown.length;
-  const lines: string[] = ["fission routing:"];
+  const lines: string[] = [...formatStats(entries), ""];
   for (const [sessionId, list] of shown) {
     const latest = list[list.length - 1]!;
     const current = latest.kind === "manual" || latest.kind === "shadow"

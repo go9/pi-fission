@@ -143,7 +143,7 @@ describe("router-only Pi Fission extension", () => {
     try {
       await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
       assert.deepEqual([...runtime.commands.keys()].sort(), [
-        "fission", "fission-agents", "fission-config", "fission-explain", "fission-mode", "fission-routing", "fission-setup", "fission-setup-status", "fission-status",
+        "fission-mode", "fission-routing", "fission-setup",
       ]);
       assert.equal(runtime.handlers.has("tool_call"), false, "Fission never intercepts tools");
       assert.equal(runtime.handlers.has("tool_result"), false);
@@ -285,7 +285,7 @@ describe("router-only Pi Fission extension", () => {
           return fetch(`${mock.baseUrl}${url.pathname.replace(/^\/v1/, "")}`, init);
         },
       });
-      await runtime.commands.get("fission-setup")?.("", context);
+      await runtime.commands.get("fission-setup")?.("probe", context);
       const config = JSON.parse(await readFile(saved.path, "utf8"));
       assert.equal(config.mode, "active");
       assert.equal(config.profiles.design.modelId, "fission-design");

@@ -92,21 +92,21 @@ describe("Pi host loader", () => {
                 finish(new Error(`get_commands failed: ${message.error ?? "unknown error"}`));
                 return;
               }
-              const command = message.data?.commands?.find((entry) => entry.name === "fission-config");
+              const command = message.data?.commands?.find((entry) => entry.name === "fission-setup");
               if (command?.source !== "extension") {
-                finish(new Error("fission-config was not loaded from the explicit extension"));
+                finish(new Error("fission-setup was not loaded from the explicit extension"));
                 return;
               }
-              send({ id: "diagnostic", type: "prompt", message: "/fission-config" });
+              send({ id: "diagnostic", type: "prompt", message: "/fission-setup" });
             } else if (message.type === "extension_ui_request" && message.method === "notify") {
-              if (message.message?.includes("fission config: off")) sawDiagnostic = true;
+              if (message.message?.includes("fission setup: off")) sawDiagnostic = true;
             } else if (message.type === "response" && message.id === "diagnostic") {
               if (!message.success) {
-                finish(new Error(`fission-config failed: ${message.error ?? "unknown error"}`));
+                finish(new Error(`fission-setup failed: ${message.error ?? "unknown error"}`));
                 return;
               }
               if (!sawDiagnostic) {
-                finish(new Error("fission-config completed without its diagnostic notification"));
+                finish(new Error("fission-setup completed without its diagnostic notification"));
                 return;
               }
               finish();

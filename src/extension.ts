@@ -113,7 +113,7 @@ function registerProvider(pi: ExtensionAPI, config: FissionConfig, discovery: Di
   // streamSimple below. Drop the old registration first; it is a no-op when absent.
   if (typeof pi.unregisterProvider === "function") pi.unregisterProvider(config.provider.id);
   pi.registerProvider(config.provider.id, {
-    name: "9Router (Pi Fission)",
+    name: `Pi Fission (${config.provider.id})`,
     baseUrl: config.provider.baseUrl,
     apiKey: config.provider.apiKey ?? "local",
     authHeader: !keylessLoopback,
@@ -153,7 +153,7 @@ function setupMappings(args: string | string[] | undefined): { mappings: Partial
   const mappings: Partial<Record<CanonicalProfile, string>> = {};
   for (const token of words(args)) {
     const separator = token.indexOf("=");
-    if (separator <= 0 || separator === token.length - 1) return { mappings, error: `expected profile=9router-group, got ${token}` };
+    if (separator <= 0 || separator === token.length - 1) return { mappings, error: `expected profile=model, got ${token}` };
     const profile = token.slice(0, separator) as CanonicalProfile;
     const modelId = token.slice(separator + 1);
     if (!CANONICAL_PROFILES.includes(profile)) return { mappings, error: `unknown profile ${profile}` };
@@ -234,7 +234,7 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     });
   };
 
-  /** Re-discover in the background when 9Router was unreachable at load, so the next prompt
+  /** Re-discover in the background when the provider was unreachable at load, so the next prompt
    *  recovers on its own. Never awaited: a down router must not stall the turn. */
   let discoveryInFlight = false;
   let lastDiscoveryAt = Date.now();
@@ -504,7 +504,7 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     const previous = ctx.model;
     if (!target || !previous) {
       state.routingStatus = "retained";
-      state.routingReason = !target ? "recommended 9Router group is unavailable" : "current Pi model is unavailable";
+      state.routingReason = !target ? "recommended model is unavailable" : "current Pi model is unavailable";
       await recordRouting(ctx, previousModel);
       updateFooter(state, ctx);
       return;
@@ -525,7 +525,7 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     if (!selected) {
       endRoute(route);
       state.routingStatus = "retained";
-      state.routingReason = "9Router group selection failed";
+      state.routingReason = "model selection failed";
     } else {
       setActiveModel({ provider: target.provider, id: target.id });
     }
@@ -631,7 +631,7 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
         state.routingStatus = "setup-blocked";
         state.routingReason = discovered.diagnostic;
         updateFooter(state, ctx);
-        report(ctx, `fission setup: 9Router unavailable · ${discovered.diagnostic}`, "warning");
+        report(ctx, `fission setup: provider unavailable · ${discovered.diagnostic}`, "warning");
         return;
       }
       const blocked = diagnoseSetup(config, discovered.models).filter((diagnostic) => !diagnostic.ok);

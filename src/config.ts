@@ -172,8 +172,12 @@ export function parseConfig(value: unknown): { config: FissionConfig | null; dia
   if (!isRecord(provider)) {
     errors.push("provider must be an object");
   } else {
-    if (typeof provider.id !== "string" || !/^9router(?:[._-][a-z0-9][a-z0-9._-]*)?$/i.test(provider.id)) {
-      errors.push("provider.id must be 9router or a 9router-prefixed identifier such as 9router-local");
+    // Any OpenAI-compatible endpoint works: the only calls made are GET {baseUrl}/models and
+    // POST {baseUrl}/chat/completions. The id is an identifier, not a supported-vendor list —
+    // it keys Pi's provider registry and model lookups, so it only has to be a stable slug.
+    // It was once pinned to /^9router/, which made every other router a config error.
+    if (typeof provider.id !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(provider.id)) {
+      errors.push("provider.id must be a slug such as litellm, openrouter, ollama, or 9router");
     }
     if (typeof provider.baseUrl !== "string") {
       errors.push("provider.baseUrl must be an http(s) URL");
@@ -186,7 +190,7 @@ export function parseConfig(value: unknown): { config: FissionConfig | null; dia
       }
     }
     if (provider.apiKey !== undefined && (typeof provider.apiKey !== "string" || !/^\$[A-Z_][A-Z0-9_]*$/i.test(provider.apiKey))) {
-      errors.push("provider.apiKey must be an environment-variable reference such as $NINE_ROUTER_API_KEY");
+      errors.push("provider.apiKey must be an environment-variable reference such as $OPENAI_API_KEY");
     } else if (provider.apiKey === undefined && !isLoopbackBaseUrl(provider.baseUrl as string | undefined)) {
       errors.push("provider.apiKey is required for non-loopback endpoints");
     }
@@ -332,10 +336,13 @@ export function createDefaultConfig(overrides: Partial<Record<CanonicalProfile, 
   return {
     version: 2,
     mode: "shadow",
+    // A local OpenAI-compatible router is the common case, so the default is loopback and
+    // keyless — which the validator permits only for loopback. Point baseUrl at whatever you
+    // run (LiteLLM :4000, Ollama :11434, LM Studio :1234, vLLM :8000, 9Router :20128) and add
+    // "apiKey": "$YOUR_ENV_VAR" for anything hosted, where a key is then required.
     provider: {
-      id: "9router",
-      baseUrl: "http://127.0.0.1:20128/v1",
-      apiKey: "$NINE_ROUTER_API_KEY",
+      id: "openai-compatible",
+      baseUrl: "http://127.0.0.1:4000/v1",
       timeoutMs: 15_000,
     },
     profiles,

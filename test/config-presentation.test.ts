@@ -76,12 +76,35 @@ describe("config diagnostics", () => {
     assert.equal(result.config, null);
     assert.ok(result.diagnostics.some((item) => item.includes("apiKey")));
   });
+
+  it("accepts any provider id, because the contract is OpenAI-compatible HTTP and not a vendor", () => {
+    // This pinned to /^9router/ once, so every other router was a config error and the
+    // extension was unusable by anyone who did not run the author's setup. The only calls
+    // made are GET {baseUrl}/models and POST {baseUrl}/chat/completions.
+    for (const id of ["litellm", "openrouter", "ollama", "openai", "vllm", "9router", "my-gateway.internal"]) {
+      const candidate = structuredClone(validConfig()) as unknown as Record<string, any>;
+      candidate.provider.id = id;
+      assert.ok(parseConfig(candidate).config, `provider id ${id} must validate`);
+    }
+
+    const empty = structuredClone(validConfig()) as unknown as Record<string, any>;
+    empty.provider.id = "";
+    assert.equal(parseConfig(empty).config, null, "an id still has to be a usable slug");
+  });
+
+  it("ships a default that is loopback and keyless, so it validates before it is edited", () => {
+    // createDefaultConfig is what an unconfigured install writes. If the default failed its
+    // own validator the first run would report a broken config the user never wrote.
+    const fresh = createDefaultConfig();
+    assert.ok(parseConfig(JSON.parse(JSON.stringify(fresh))).config, "the default config must validate");
+    assert.equal(fresh.provider.apiKey, undefined, "no key is required for a loopback default");
+  });
 });
 
 describe("minimal status UI", () => {
   it("shows setup-required, unavailable, routed, retained, and manual states", () => {
     assert.match(footerText(baseView({ config: { status: "unconfigured", path: "/x", config: null, diagnostics: [] }, discovery: null })), /setup required/);
-    assert.match(footerText(baseView({ discovery: { ...readyDiscovery(), status: "timeout", diagnostic: "timeout" } })), /9Router unavailable/);
+    assert.match(footerText(baseView({ discovery: { ...readyDiscovery(), status: "timeout", diagnostic: "timeout" } })), /provider unavailable/);
 
     const code = classify({ text: "implement a code fix" });
     const route = recommend({ classification: code, config: validConfig(), resolvedModels: allModels, effectiveCapabilities: allCapabilities, providerReady: true });

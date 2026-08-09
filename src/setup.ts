@@ -173,7 +173,7 @@ export async function probeAll(
   config: FissionConfig,
   options: SetupProbeOptions = {},
 ): Promise<{ probes: Partial<Record<CanonicalProfile, ProbeResult>>; complete: boolean; failures: CanonicalProfile[] }> {
-  // Concurrently: sequentially this was seven timeouts deep, so a stalled 9Router blocked
+  // Concurrently: sequentially this was seven timeouts deep, so a stalled provider blocked
   // /fission-setup for up to 105s instead of one probe timeout.
   const results = await Promise.all(CANONICAL_PROFILES.map((profile) =>
     runProbe(config, profile, config.profiles[profile].modelId, options)));

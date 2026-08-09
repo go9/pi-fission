@@ -157,11 +157,11 @@ export async function discoverModels(
   } catch (error) {
     const name = (error as Error).name;
     if (name === "TimeoutError" || name === "AbortError") return emptyResult("timeout", "model discovery timed out");
-    return emptyResult("unavailable", "9Router model discovery is unavailable");
+    return emptyResult("unavailable", "provider model discovery is unavailable");
   }
 
-  if (response.status === 401 || response.status === 403) return emptyResult("auth", "9Router authentication failed");
-  if (!response.ok) return emptyResult("unavailable", `9Router model discovery returned HTTP ${response.status}`);
+  if (response.status === 401 || response.status === 403) return emptyResult("auth", "provider authentication failed");
+  if (!response.ok) return emptyResult("unavailable", `provider model discovery returned HTTP ${response.status}`);
 
   let payload: unknown;
   try {
@@ -173,7 +173,7 @@ export async function discoverModels(
     return emptyResult("malformed", "model catalogue must contain a data array");
   }
 
-  // One unparseable entry must not discard the whole catalogue: 9Router can list a group
+  // One unparseable entry must not discard the whole catalogue: a provider can list a model
   // this version does not understand, and dropping every model would disable routing until
   // Pi restarts. If nothing survives, that is the "empty" case below.
   const rawModels = (payload as { data: unknown[] }).data;

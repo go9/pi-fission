@@ -23,6 +23,18 @@ import {
   type RoutingStatus,
 } from "./presentation.ts";
 import { diagnoseSetup, isActiveReady, loadSetupState, probeAll, saveSetupState } from "./setup.ts";
+import {
+  beginPrompt,
+  beginRoute,
+  createRouteState,
+  decideModelSelect,
+  endRoute,
+  expectSelection,
+  expectThinkingEcho,
+  observeThinkingSelect,
+  takeQueuedSelection,
+  type ModelIdentity,
+} from "./route-controller.ts";
 import { appendRoutingEntry, describeRouting, formatAgents, formatRoutingLog, readRoutingEntries, routingLogPath, sessionSummaries, widgetRows, type RoutingLogEntry } from "./routing-log.ts";
 import type {
   CanonicalProfile,
@@ -38,11 +50,6 @@ export interface FissionExtensionOptions {
   fetch?: typeof fetch;
   env?: NodeJS.ProcessEnv;
   stderr?: (message: string) => void;
-}
-
-interface ModelIdentity {
-  provider: string;
-  id: string;
 }
 
 interface RuntimeState {
@@ -193,38 +200,13 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     sessionId: "unknown",
   };
 
-  let restoreModel: ActivePiModel | null = null;
-  let routeActive = false;
-  let routeChangedModel = false;
-  let expectedInternalSelection: ModelIdentity | null = null;
-  let restorationInProgress = false;
+  /** Route/restore bookkeeping: which phase the session is in, and which host events are
+   *  echoes of our own actions rather than the user's. See route-controller.ts. */
+  const route = createRouteState();
   let restorationPromise: Promise<void> | null = null;
-  let userSelectionDuringRestore: ActivePiModel | null = null;
-  /** Model we just restored, plus when; late set-source events matching it are our own restore, not overrides. */
-  let lastRestoreModel: ModelIdentity | null = null;
-  let lastRestoreAt = 0;
-  let restoreThinkingLevel: PiThinkingLevel | null = null;
-  let userThinkingLevel: PiThinkingLevel | null = null;
-  let expectedInternalThinkingLevel: PiThinkingLevel | null = null;
-  let activeInternalThinkingStart: PiThinkingLevel | null = null;
-  let activeInternalThinkingObserved = false;
-  let routeSelectionInProgress = false;
-  let pendingInternalThinkingTransitions: Array<{
-    model: ModelIdentity;
-    previousLevel: PiThinkingLevel;
-    level: PiThinkingLevel;
-  }> = [];
-  let manualOverride = false;
-  /** Whether a real user prompt has begun; selections before that are startup defaults, not overrides. */
-  let promptSeen = false;
-
-  /** The same value `state.activeModel` renders, kept structured. The view wants a string;
-   *  the thinking-level bookkeeping wants the parts, and re-splitting the rendered string
-   *  to recover them guesses at a boundary we already knew. */
-  let activeModelIdentity: ModelIdentity | null = null;
 
   const setActiveModel = (identity: ModelIdentity | null): void => {
-    activeModelIdentity = identity;
+    route.activeModel = identity;
     state.activeModel = displayModel(identity);
   };
 
@@ -280,28 +262,30 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     try { return pi.getThinkingLevel(); } catch { return null; }
   };
 
+  /** Select a model on the user's behalf, leaving an expectation so the resulting
+   *  model_select event is recognized as ours however late it arrives. */
   const selectInternalModel = async (model: ActivePiModel): Promise<boolean> => {
-    activeInternalThinkingStart = readThinkingLevel();
-    activeInternalThinkingObserved = false;
+    expectSelection(route, model);
+    route.selectionInFlight = true;
+    route.thinkingAtSelectionStart = readThinkingLevel();
+    route.thinkingEchoObserved = false;
     try {
       return await pi.setModel(model);
     } finally {
-      const start = activeInternalThinkingStart;
+      const start = route.thinkingAtSelectionStart;
       const after = readThinkingLevel();
-      if (start && after && start !== after && !activeInternalThinkingObserved) {
-        pendingInternalThinkingTransitions.push({
-          model: { provider: model.provider, id: model.id },
-          previousLevel: start,
-          level: after,
-        });
+      // The switch moved the thinking level and the host has not told us yet; expect it.
+      if (start && after && start !== after && !route.thinkingEchoObserved) {
+        expectThinkingEcho(route, { model: { provider: model.provider, id: model.id }, previousLevel: start, level: after });
       }
-      activeInternalThinkingStart = null;
-      activeInternalThinkingObserved = false;
+      route.selectionInFlight = false;
+      route.thinkingAtSelectionStart = null;
+      route.thinkingEchoObserved = false;
     }
   };
 
   const applyInternalThinkingLevel = async (level: PiThinkingLevel): Promise<boolean> => {
-    expectedInternalThinkingLevel = level;
+    route.expectedThinkingLevel = level;
     try {
       pi.setThinkingLevel(level);
       await Promise.resolve();
@@ -310,83 +294,57 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
     } catch {
       return false;
     } finally {
-      if (expectedInternalThinkingLevel === level) expectedInternalThinkingLevel = null;
+      if (route.expectedThinkingLevel === level) route.expectedThinkingLevel = null;
     }
-  };
-
-  const takeUserSelectionDuringRestore = (): ActivePiModel | null => {
-    const selected = userSelectionDuringRestore;
-    userSelectionDuringRestore = null;
-    return selected;
   };
 
   const restoreRoute = async (ctx: ExtensionContext): Promise<void> => {
     if (restorationPromise) return restorationPromise;
-    if (!routeActive) return;
+    if (route.phase.kind !== "routed") return;
+    const { restore, changedModel } = route.phase;
     restorationPromise = (async () => {
-      const previous = restoreModel;
-      const originalThinking = restoreThinkingLevel;
+      const previous = restore.model;
       let modelReady = false;
-      if (previous && routeChangedModel) {
-        restorationInProgress = true;
-        userSelectionDuringRestore = null;
-        expectedInternalSelection = { provider: previous.provider, id: previous.id };
+      if (previous && changedModel) {
+        route.phase = { kind: "restoring", restore, changedModel };
+        route.queuedSelections = [];
         let restored = false;
         try { restored = await selectInternalModel(previous); } catch { restored = false; }
-        expectedInternalSelection = null;
 
-        let userSelection = takeUserSelectionDuringRestore();
+        // The user picked a model while we were putting theirs back. Honor the last such
+        // pick rather than the restore point, and stop routing automatically.
+        let userSelection = takeQueuedSelection(route);
         while (userSelection) {
-          expectedInternalSelection = { provider: userSelection.provider, id: userSelection.id };
           let retained = false;
           try { retained = await selectInternalModel(userSelection); } catch { retained = false; }
-          expectedInternalSelection = null;
           if (!retained) {
             restored = false;
             break;
           }
           restored = true;
-          manualOverride = true;
+          route.manual = true;
           state.routingStatus = "manual";
           state.routingReason = "user selected a model";
           setActiveModel({ provider: userSelection.provider, id: userSelection.id });
-          userSelection = takeUserSelectionDuringRestore();
+          userSelection = takeQueuedSelection(route);
         }
-        restorationInProgress = false;
         modelReady = restored;
       } else if (previous) {
         modelReady = true;
       }
 
       if (modelReady && state.routingStatus !== "manual") {
-        lastRestoreModel = previous;
-        lastRestoreAt = Date.now();
-      }
-      if (modelReady && state.routingStatus !== "manual") {
         setActiveModel(previous ? { provider: previous.provider, id: previous.id } : null);
       }
       if (modelReady) {
-        const desiredThinking = userThinkingLevel ?? originalThinking;
+        const desiredThinking = route.userThinkingLevel ?? restore.thinkingLevel;
         if (desiredThinking && !(await applyInternalThinkingLevel(desiredThinking))) modelReady = false;
       }
       if (!modelReady && state.routingStatus !== "manual") {
         state.routingStatus = "restore-failed";
         state.routingReason = "previous model or thinking level could not be restored";
       }
-
-      routeActive = false;
-      routeChangedModel = false;
-      restoreModel = null;
-      restoreThinkingLevel = null;
-      userThinkingLevel = null;
-      expectedInternalSelection = null;
-      expectedInternalThinkingLevel = null;
-      activeInternalThinkingStart = null;
-      activeInternalThinkingObserved = false;
-      routeSelectionInProgress = false;
-      pendingInternalThinkingTransitions = [];
-      restorationInProgress = false;
-      userSelectionDuringRestore = null;
+      endRoute(route);
     })();
     try { await restorationPromise; } finally { restorationPromise = null; }
     updateFooter(state, ctx);
@@ -500,9 +458,7 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
-    promptSeen = true;
-    lastRestoreModel = null;
-    lastRestoreAt = 0;
+    beginPrompt(route);
     ensureDiscovery();
     const previousModel = modelIdentity(ctx);
     setActiveModel(previousModel);
@@ -523,7 +479,7 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
       updateFooter(state, ctx);
       return;
     }
-    if (manualOverride) {
+    if (route.manual) {
       state.routingStatus = "manual";
       state.routingReason = "manual model selection takes precedence; run /fission-mode active to resume automatic routing";
       await recordRouting(ctx, previousModel);
@@ -547,29 +503,20 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
       return;
     }
 
-    restoreModel = previous;
-    restoreThinkingLevel = readThinkingLevel(ctx);
-    routeActive = true;
-    routeChangedModel = previous.provider !== target.provider || previous.id !== target.id;
+    const changedModel = previous.provider !== target.provider || previous.id !== target.id;
+    beginRoute(route, { model: previous, thinkingLevel: readThinkingLevel(ctx) }, changedModel);
     state.routingStatus = "routed";
-    if (!routeChangedModel) {
+    if (!changedModel) {
       setActiveModel({ provider: target.provider, id: target.id });
       await recordRouting(ctx, previousModel);
       updateFooter(state, ctx);
       return;
     }
 
-    routeSelectionInProgress = true;
-    expectedInternalSelection = { provider: target.provider, id: target.id };
     let selected = false;
     try { selected = await selectInternalModel(target); } catch { selected = false; }
-    routeSelectionInProgress = false;
-    expectedInternalSelection = null;
     if (!selected) {
-      routeActive = false;
-      routeChangedModel = false;
-      restoreModel = null;
-      restoreThinkingLevel = null;
+      endRoute(route);
       state.routingStatus = "retained";
       state.routingReason = "9Router group selection failed";
     } else {
@@ -581,60 +528,28 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
 
   pi.on("model_select", (event, ctx) => {
     const selected = { provider: event.model.provider, id: event.model.id };
-    const internal = expectedInternalSelection
-      && expectedInternalSelection.provider === selected.provider
-      && expectedInternalSelection.id === selected.id;
-    if (internal) {
-      expectedInternalSelection = null;
-    } else if (restorationInProgress) {
-      if (restoreModel && selected.provider === restoreModel.provider && selected.id === restoreModel.id) {
-        // The restore's own model event arriving late: internal, never a user selection.
+    switch (decideModelSelect(route, event)) {
+      case "queue":
+        route.queuedSelections.push(event.model);
+        break;
+      case "override":
+        route.manual = true;
+        // Abandon the route entirely: the thinking level we were holding for the restore
+        // belonged to a route the user just replaced.
+        endRoute(route);
+        state.routingStatus = "manual";
+        state.routingReason = "user selected a model";
         setActiveModel(selected);
-      } else {
-        userSelectionDuringRestore = event.model;
-      }
-    } else if (lastRestoreModel
-      && selected.provider === lastRestoreModel.provider
-      && selected.id === lastRestoreModel.id
-      && Date.now() - lastRestoreAt < 3000) {
-      // Late set-source event from our own restore: not a user override.
-      setActiveModel(selected);
-    } else if (event.source === "restore") {
-      // Pi re-applying a model (our own restore or a session restore): never a user override.
-      setActiveModel(selected);
-    } else if (event.source === "cycle" || promptSeen) {
-      manualOverride = true;
-      routeActive = false;
-      routeChangedModel = false;
-      restoreModel = null;
-      state.routingStatus = "manual";
-      state.routingReason = "user selected a model";
-      setActiveModel(selected);
-    } else {
-      // Session-start default or idle provider fallback: not a user override.
-      setActiveModel(selected);
+        break;
+      case "adopt":
+        setActiveModel(selected);
+        break;
     }
     updateFooter(state, ctx);
   });
 
   pi.on("thinking_level_select", (event) => {
-    const currentModel = activeModelIdentity;
-    const expectedTargetIsCurrent = expectedInternalSelection !== null
-      && currentModel?.provider === expectedInternalSelection.provider
-      && currentModel.id === expectedInternalSelection.id;
-    const internalExplicit = expectedInternalThinkingLevel === event.level;
-    const activeInternalClamp = expectedTargetIsCurrent
-      && activeInternalThinkingStart === event.previousLevel
-      && !activeInternalThinkingObserved;
-    const pendingIndex = pendingInternalThinkingTransitions.findIndex((transition) =>
-      currentModel?.provider === transition.model.provider
-      && currentModel.id === transition.model.id
-      && transition.previousLevel === event.previousLevel
-      && transition.level === event.level);
-    if (internalExplicit) expectedInternalThinkingLevel = null;
-    else if (activeInternalClamp) activeInternalThinkingObserved = true;
-    else if (pendingIndex >= 0) pendingInternalThinkingTransitions.splice(pendingIndex, 1);
-    else if (routeSelectionInProgress || routeActive || restorationInProgress) userThinkingLevel = event.level;
+    observeThinkingSelect(route, event);
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
@@ -692,7 +607,7 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
       const updated = { ...state.config.config, mode: requested } as FissionConfig;
       await saveConfig(configPath, updated);
       state.config = { status: "ready", path: configPath, config: updated, diagnostics: [] };
-      manualOverride = false;
+      route.manual = false;
       state.routingStatus = "idle";
       state.routingReason = null;
       updateFooter(state, ctx);
@@ -752,7 +667,7 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
       await saveConfig(configPath, config);
       state.config = { status: "ready", path: configPath, config, diagnostics: [] };
       registerProvider(pi, config, discovered);
-      manualOverride = false;
+      route.manual = false;
       state.routingStatus = "idle";
       state.routingReason = null;
       updateFooter(state, ctx);

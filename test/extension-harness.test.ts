@@ -359,6 +359,31 @@ describe("router-only Pi Fission extension", () => {
     }
   });
 
+  it("ignores a late set-source event however long it takes to arrive", async () => {
+    const saved = await fixture();
+    const runtime = fakeApi();
+    const target = { provider: "9router", id: saved.config.profiles.code.modelId };
+    const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target]);
+    const realNow = Date.now;
+    try {
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
+      await emit(runtime, context, "agent_settled", {});
+      assert.equal(runtime.selectionCalls.length, 2);
+      // Same scenario as the test above, except a loaded machine delivers Pi's echo of our
+      // own restore late. Whether an event is ours is a fact about causation, not about how
+      // fast the host happened to be.
+      Date.now = () => realNow() + 10_000;
+      await emit(runtime, context, "model_select", { model: { provider: "existing", id: "original" }, previousModel: target, source: "set" });
+      Date.now = realNow;
+      await emit(runtime, context, "before_agent_start", { prompt: "Implement another helper", images: [] });
+      assert.equal(runtime.selectionCalls.length, 3, "a slow echo of our own restore is not a manual override");
+    } finally {
+      Date.now = realNow;
+      await saved.mock.close();
+    }
+  });
+
   it("registers a live agents widget and a toggle shortcut", async () => {
     const saved = await fixture();
     const runtime = fakeApi();

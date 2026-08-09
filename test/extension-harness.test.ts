@@ -436,6 +436,33 @@ describe("router-only Pi Fission extension", () => {
     }
   });
 
+  it("resumes automatic routing in a new session after a manual pick in the old one", async () => {
+    const saved = await fixture();
+    const runtime = fakeApi();
+    const target = { provider: "9router", id: saved.config.profiles.code.modelId };
+    const context = fakeContext(tmpdir(), [], { provider: "existing", id: "original" }, [target]);
+    try {
+      await createFissionExtension(runtime.api, { configPath: saved.path, env: { TEST_9ROUTER_KEY: "test" } });
+      await emit(runtime, context, "session_start", { reason: "startup" });
+      await emit(runtime, context, "before_agent_start", { prompt: "Implement a helper", images: [] });
+      assert.equal(runtime.selectionCalls.length, 1);
+      await emit(runtime, context, "agent_settled", {});
+
+      // The user pins a model, which correctly pauses routing for this session.
+      await emit(runtime, context, "model_select", { model: { provider: "existing", id: "original" }, previousModel: target, source: "cycle" });
+
+      // ...then starts a fresh session. The extension outlives the session, so a pause that
+      // belonged to the old one must not silently disable routing in the new one.
+      await emit(runtime, context, "session_shutdown", { reason: "new" });
+      await emit(runtime, context, "session_start", { reason: "new" });
+      const before = runtime.selectionCalls.length;
+      await emit(runtime, context, "before_agent_start", { prompt: "Implement another helper", images: [] });
+      assert.equal(runtime.selectionCalls.length, before + 1, "a new session starts with automatic routing live");
+    } finally {
+      await saved.mock.close();
+    }
+  });
+
   it("registers a live agents widget and a toggle shortcut", async () => {
     const saved = await fixture();
     const runtime = fakeApi();

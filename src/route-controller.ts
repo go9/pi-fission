@@ -184,6 +184,17 @@ export function endRoute(state: RouteState): void {
   state.thinkingEchoObserved = false;
 }
 
+/**
+ * Start a fresh session. The extension is loaded once per Pi process but `session_start`
+ * fires again for every new/resumed/forked session, so a pause the user asked for in one
+ * session -- or a half-finished route from one that was replaced mid-turn -- must not carry
+ * into the next. Leaving `manual` set here disabled automatic routing for the rest of the
+ * process with nothing on screen to explain it.
+ */
+export function resetSession(state: RouteState): void {
+  Object.assign(state, createRouteState());
+}
+
 /** Take the next user selection seen during a restore, if any. */
 export function takeQueuedSelection(state: RouteState): ActivePiModel | null {
   return state.queuedSelections.shift() ?? null;

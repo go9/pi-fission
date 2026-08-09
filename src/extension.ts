@@ -32,6 +32,7 @@ import {
   expectSelection,
   expectThinkingEcho,
   observeThinkingSelect,
+  resetSession,
   takeQueuedSelection,
   type ModelIdentity,
 } from "./route-controller.ts";
@@ -434,6 +435,9 @@ export async function createFissionExtension(pi: ExtensionAPI, options: FissionE
   };
 
   pi.on("session_start", async (_event, ctx) => {
+    resetSession(route);
+    state.routingStatus = "idle";
+    state.routingReason = null;
     state.sessionId = getSessionId(ctx);
     setActiveModel(modelIdentity(ctx));
     updateFooter(state, ctx);

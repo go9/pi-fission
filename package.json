@@ -1,9 +1,15 @@
 {
   "name": "pi-fission",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Automatic semantic routing from Pi to seven configurable models on any OpenAI-compatible endpoint",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/go9/pi-fission.git"
+  },
+  "bugs": "https://github.com/go9/pi-fission/issues",
+  "homepage": "https://github.com/go9/pi-fission#readme",
   "keywords": [
     "pi-package",
     "pi-extension",

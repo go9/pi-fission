@@ -1,10 +1,14 @@
 # Pi Fission
 
+[![CI](https://github.com/go9/pi-fission/actions/workflows/ci.yml/badge.svg)](https://github.com/go9/pi-fission/actions/workflows/ci.yml)
+
 Automatic semantic routing from Pi to seven models you choose, on any OpenAI-compatible endpoint.
 
 Set it up once, then prompt normally. Fission classifies each request, selects the model you mapped to that kind of work, and shows the decision in Pi's footer. It does not manage tickets, plans, tools, worktrees, subagents, tests, or releases.
 
 ## Requirements
+
+Node >= 22.19 and Pi (`@earendil-works/pi-coding-agent`) >= 0.83.
 
 Any endpoint that speaks the OpenAI API. Fission makes exactly two kinds of call — `GET {baseUrl}/models` to discover what is available and `POST {baseUrl}/chat/completions` to route — so a proxy, a router, a local server, or a vendor all work the same way:
 
@@ -86,7 +90,7 @@ The classifier is a set of ordered regular expressions over the prompt text ([`s
 
 What that buys is bounded, and the limits are real: it keys on English, and it reads vocabulary rather than meaning, so a prompt that describes risky work without using risky words is classified on what it says. Two things keep that honest rather than silently wrong:
 
-- **Confidence is a first-class output, and the policy has a floor.** Below `0.5`, or on `unknown`, Fission routes nothing and leaves the current model alone ([`src/policy.ts`](src/policy.ts)). Not knowing is a supported answer.
+- **Confidence is a first-class output, and the policy has a floor.** At or below `0.5`, or on `unknown`, Fission routes nothing and leaves the current model alone ([`src/policy.ts`](src/policy.ts)). Not knowing is a supported answer.
 - **Ambiguous follow-ups inherit, but not forever.** "ok do that" carries no phase vocabulary, so it continues the phase already established — at reduced confidence that decays each turn, until it crosses the floor and routing stops assuming. A phase is never pinned past its evidence.
 
 If you would rather it were a model, the seam is small: `classify()` takes text and returns a `Classification`. Nothing above it knows how that was produced.
@@ -130,6 +134,18 @@ footer and the ctrl+e widget carry the live picture.
 
 Selecting a model manually pauses automatic routing so Fission cannot fight the user. Run `/fission-mode active` to resume automatic routing.
 
+## Project overrides
+
+A `projectOverrides` entry in the config pins one or more profiles to different models for a single repository:
+
+```json
+"projectOverrides": [
+  { "repo": "/Users/you/Sites/app", "profiles": { "code": "app-code-model" } }
+]
+```
+
+Matching is by repository path, and it covers subdirectories — launching Pi from anywhere inside `/Users/you/Sites/app` keeps the override. Override targets are validated against the provider's catalogue and probed at setup, the same as the seven default mappings: `/fission-setup` shows each distinct override target as its own `override` row. An override target the provider does not list makes that profile ineligible rather than being attempted — routing falls through to another eligible profile, and a failed override probe never blocks active mode.
+
 ## Scope
 
 Fission routes, and stops there. It does not intercept tool calls, gate approvals, manage worktrees or branches, orchestrate subagents, or run tests — Pi and whatever workflow tooling you already use own those, and a router that quietly took them over would be much harder to trust with the one job it does have.
@@ -144,3 +160,5 @@ npm test
 npm run test:integration
 npm pack --dry-run
 ```
+
+Contributions welcome — open a PR. CI runs the same `typecheck` and `test` steps on every pull request.

@@ -16,7 +16,7 @@ Pi Fission routes each prompt to a semantic 9Router group (fission splits one fl
 - Discovers the 9Router groups, runs one real inference probe per profile
 - Activates automatic routing only when all 7 profiles pass
 - Override group mappings: `/fission-setup code=my-group review=my-group`
-- The key comes from `$NINE_ROUTER_API_KEY` (keychain: `pi-fusion-9router`)
+- The key comes from `$NINE_ROUTER_API_KEY` (keychain: `pi-fission-9router`)
 
 ## Normal use
 

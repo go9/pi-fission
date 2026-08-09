@@ -47,7 +47,7 @@ Inspect the inventory pages and improve their usability.
 The footer shows the latest decision:
 
 ```text
-fission: active · plan → design · fission-design
+fission: active · design → design · fission-design
 ```
 
 Low-confidence, unavailable, manually overridden, setup-blocked, and restoration-failure states are shown explicitly. Fission never intercepts tools or creates an approval workflow.
@@ -57,25 +57,25 @@ Low-confidence, unavailable, manually overridden, setup-blocked, and restoration
 The Pi TUI shows a live **fission agents widget** above the editor:
 
 ```text
-fission: 3 agents routing · ctrl+e for details
+fission: 3 agents routing · main fission-sidekick · ctrl+e for details
 ```
 
-Press **ctrl+e** to expand it into per-agent rows, updating live every ~2 seconds:
+Press **ctrl+e** to expand it into per-agent rows, updating live every 5 seconds:
 
 ```text
 fission workers (3) · ctrl+e to collapse
-  main              fission-sidekick · writing code (code)
-  reviewer          fission-reviewer · reviewing the work (review)
-  sub 3f1a9c2b      fission-explore · exploring the codebase (fast)
+  main · fission-sidekick · writing code
+  reviewer · fission-reviewer · reviewing the work
+  worker 3f1a9c2b · fission-explore · exploring the codebase
 ```
 
-Each row shows the agent (main, named subagent session, or a short id), the model it is currently using, and why it switched. The same view is available in any Pi mode as a command:
+Each row shows the agent (main, a named subagent, its phase, or `worker <short id>` when the session has no stable name), the model it is currently using, and why it switched. The same view is available in any Pi mode as a command:
 
 ```text
 /fission-agents
 ```
 
-The raw log lives at `~/.pi/agent/extensions/pi-fission.routing.jsonl`; `/fission-routing` shows the full grouped history. Entries contain only session id/name, working directory, phase, profile, model transitions, and reason codes — never prompts, code, or tool output.
+The raw log lives at `~/.pi/agent/extensions/pi-fission.routing.jsonl`; `/fission-routing` shows the grouped history for the ten most recently active sessions. Entries contain only session id/name, working directory, phase, profile, model transitions, and reason codes — never prompts, code, or tool output. The file is self-pruning: once it passes 1 MB it is rewritten with the most recent 1,000 entries.
 
 ## Diagnostics
 

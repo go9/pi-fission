@@ -44,14 +44,14 @@ Setup re-runs all seven probes and returns to active mode only if every profile 
 
 ## Live agents widget
 
-In the TUI, a widget above the editor shows how many Fission agents are active. Press **ctrl+e** to expand it; rows update every ~2 seconds with each agent's current model and why it switched:
+In the TUI, a widget above the editor shows how many Fission agents are active. Press **ctrl+e** to expand it; rows update every 5 seconds with each agent's current model and why it switched:
 
 ```text
-fission: 2 agents routing · ctrl+e for details   (collapsed)
+fission: 2 agents routing · main fission-sidekick · ctrl+e for details   (collapsed)
 
 fission workers (2) · ctrl+e to collapse
-  main        fission-sidekick · writing code
-  reviewer    fission-reviewer · reviewing the work
+  main · fission-sidekick · writing code
+  reviewer · fission-reviewer · reviewing the work
 ```
 
 `/fission-agents` prints the same summary in any mode.
@@ -70,10 +70,14 @@ fission workers (2) · ctrl+e to collapse
 `/fission-routing` shows, per session (main agent and each subagent), the current model and why it was selected:
 
 ```text
-switched to fission-sidekick because writing code
-switched to fission-explore because exploring the codebase
-switched to fission-reviewer because reviewing the work
+fission routing:
+  session 3f1a9c2b-... · /Users/you/Sites/app
+    now: fission-sidekick (code)
+    switched to fission-explore because exploring the codebase · 74%
+    switched to fission-sidekick because writing code · 91%
 ```
+
+Only the three most recent real switches are listed per session, and only the ten most recently active sessions are rendered; anything beyond that is summarized as a count.
 
 If the footer says:
 

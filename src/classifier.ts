@@ -51,6 +51,15 @@ function result(
  *  ordinary follow-up still routes. */
 const CONTINUATION_CONFIDENCE = 0.7;
 
+/** Each further turn without fresh evidence is one step more distant from the thing that
+ *  was actually observed, so an inherited phase loses confidence as the chain grows. The
+ *  decay is what bounds the chain: confidence falls under the policy's own 0.5 floor after
+ *  five continued turns and routing stops assuming, with no separate counter or threshold.
+ *  Real logs contain a 39-turn chain, so an undecayed inheritance would pin a phase — and
+ *  its risk level, and the expensive profile that follows from it — far past its evidence. */
+const CONTINUATION_DECAY = 0.05;
+const CONTINUED = "phase.continued";
+
 export interface ClassifierInput {
   text?: string;
   imageCount?: number;
@@ -142,12 +151,15 @@ export function classify(input: ClassifierInput): Classification {
   // prompt with no phase vocabulary has no capability or intent signal either.
   const previous = input.previous;
   if (text && previous && previous.phase !== "unknown") {
+    const confidence = previous.reasonCodes.includes(CONTINUED)
+      ? previous.confidence - CONTINUATION_DECAY
+      : Math.min(previous.confidence, CONTINUATION_CONFIDENCE);
     return result(
       previous.phase,
       previous.complexity,
       previous.risk,
-      Math.min(previous.confidence, CONTINUATION_CONFIDENCE),
-      ["input.ambiguous", "phase.continued", `phase.${previous.phase}`],
+      confidence,
+      ["input.ambiguous", CONTINUED, `phase.${previous.phase}`],
       previous.requiredCapabilities,
       previous.mutationIntent,
     );

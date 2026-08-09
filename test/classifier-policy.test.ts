@@ -199,14 +199,38 @@ describe("design phase", () => {
       assert.ok(classify({ text: "", previous }).reasonCodes.includes("input.empty"));
     });
 
-    it("a chain of follow-ups stays pinned to the established phase without drifting up", () => {
-      let current = previous;
-      for (let turn = 0; turn < 5; turn += 1) {
-        current = classify({ text: "keep going", previous: current });
-        assert.equal(current.phase, "implement");
+    it("confidence decays along a chain and never drifts up", () => {
+      let current = classify({ text: "keep going", previous });
+      for (let turn = 0; turn < 4; turn += 1) {
+        const next = classify({ text: "keep going", previous: current });
+        assert.equal(next.phase, "implement");
+        assert.ok(next.confidence < current.confidence, `turn ${turn} must lose confidence`);
+        current = next;
       }
-      const oneStep = classify({ text: "keep going", previous });
-      assert.equal(current.confidence, oneStep.confidence, "confidence must not drift over a chain");
+    });
+
+    it("a chain stops routing once it outruns its evidence", () => {
+      const config = validConfig();
+      let current = previous;
+      const routed: boolean[] = [];
+      for (let turn = 0; turn < 10; turn += 1) {
+        current = classify({ text: "keep going", previous: current });
+        routed.push(recommend({ classification: current, config, resolvedModels: allModels, providerReady: true }).profile !== null);
+      }
+      assert.ok(routed[0], "an immediate follow-up must still route");
+      assert.ok(!routed[routed.length - 1], "a long chain must stop assuming the phase holds");
+      // Once it gives up it must stay given up, not oscillate back into routing.
+      const firstGiveUp = routed.indexOf(false);
+      assert.ok(routed.slice(firstGiveUp).every((value) => value === false));
+    });
+
+    it("an escalated risk level is not inherited indefinitely", () => {
+      const protectedTurn = classify({ text: "Implement an authentication and permissions migration" });
+      assert.equal(protectedTurn.risk, "protected");
+      let current = protectedTurn;
+      for (let turn = 0; turn < 10; turn += 1) current = classify({ text: "ok", previous: current });
+      const route = recommend({ classification: current, config: validConfig(), resolvedModels: allModels, providerReady: true });
+      assert.equal(route.profile, null, "protected risk must not pin the expensive profile forever");
     });
   });
 });
